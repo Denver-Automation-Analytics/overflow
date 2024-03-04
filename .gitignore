@@ -84,3 +84,6 @@ target/
 
 # data folder
 data/
+
+# vscode
+.vscode/
