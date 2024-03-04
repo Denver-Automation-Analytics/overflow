@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from breach_pits import breach_cingle_cell_pits
+from breach_pits import breach_single_cell_pits
 
 
 chunk = np.array(
@@ -14,5 +14,5 @@ chunk = np.array(
 )
 @pytest.fixture
 def test_breach_cingle_cell_pits(chunk):
-    breach=breach_cingle_cell_pits(chunk)
+    breach=breach_single_cell_pits(chunk)
     assert breach[3,3]==60

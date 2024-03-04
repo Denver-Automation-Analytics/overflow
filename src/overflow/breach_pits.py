@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def breach_cingle_cell_pits(chunk: np.ndarray) -> np.ndarray:
+def breach_single_cell_pits(chunk: np.ndarray) -> np.ndarray:
     """
     This function is used to breach single cell pits in a chunk of a DEM.
     The function takes a chunk of a DEM as input and returns a chunk of DEM with breached single cell pits.
@@ -51,4 +51,4 @@ def breach_cingle_cell_pits(chunk: np.ndarray) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    chunk = breach_cingle_cell_pits(chunk)
+    chunk = breach_single_cell_pits(chunk)
