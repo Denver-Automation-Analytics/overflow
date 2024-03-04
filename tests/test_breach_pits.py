@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from breach_pits import breach_single_cell_pits
+from overflow.breach_pits import breach_single_cell_pits
 
 
 chunk = np.array(
