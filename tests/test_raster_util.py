@@ -8,6 +8,7 @@ from overflow.util.raster import raster_chunker, read_raster_with_bounds_handlin
 # allow protected access for testing
 # pylint: disable=protected-access
 
+
 @pytest.fixture
 def raster_band():
     """Create a random raster band for testing.
