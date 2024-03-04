@@ -2,6 +2,8 @@ from typing import Iterator
 from osgeo import gdal
 import numpy as np
 
+gdal.UseExceptions()
+
 
 def gdal_data_type_to_numpy_data_type(gdal_dtype: int) -> np.dtype:
     """Map a GDAL data type to a numpy data type.

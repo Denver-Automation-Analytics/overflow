@@ -1,3 +1,5 @@
 [FORMAT]
 max-line-length=120
 disable=missing-module-docstring
+init-hook='import sys; sys.path.append("./src")'
+max-locals = 20
