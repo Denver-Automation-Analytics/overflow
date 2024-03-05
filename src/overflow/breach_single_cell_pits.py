@@ -1,5 +1,7 @@
 import numpy as np
 from numba import njit
+from osgeo import gdal
+from util.raster import raster_chunker
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -54,25 +56,32 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
                                 pass
                             else:
                                 chunk_copy[row+dy[breachcell[k]],col+dx[breachcell[k]]]=(z+zn)/2
+                                print("pit resolved at",row,col,z,zn)
                     if unsolved:
                         unsolved_pits_raster[row,col]=1
                         
 
     return chunk_copy,unsolved_pits_raster
 
+def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
+    input_raster = gdal.Open(input_path)
+    projection = input_raster.GetProjection()
+    transform = input_raster.GetGeoTransform()
+    
+    band = input_raster.GetRasterBand(1)
+    nodata_value=band.GetNoDataValue()
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(output_path, input_raster.RasterYSize,input_raster.RasterXSize, 1, gdal.GDT_Float32)
+    
+    dataset.SetProjection(projection)
+    dataset.SetGeoTransform(transform)
+    output_band=dataset.GetRasterBand(1)
+    
+    for chunk in raster_chunker(band,chunk_size=chunk_size,chunk_buffer_size=2):
+        result,_= breach_single_cell_pits_in_chunk(chunk.data,nodata_value)
+        
+        chunk.from_numpy(result)
+        chunk.write(output_band) 
+        
 
 
-chunk = np.array(
-    [   [-999,-999,-999, -999, -999, -999, -999,-999,-999],
-        [-999,-999,-999, -999, -999, -999, -999,-999,-999],
-        [-999,-999,100, 101, 90, 97, 90,-999,-999],
-        [-999, -999,103, 102, 80, 96, 95,-999,-999],
-        [-999, -999,94, 95, 96, 95, 94,-999,-999],
-        [-999, -999,97, 98, 50, 94, 90,-999,-999],
-        [-999, -999,95, 90, 85, 40, 92,-999,-999],
-        [-999,-999,-999, -999, -999, -999, -999,-999,-999],
-        [-999,-999,-999, -999, -999, -999, -999,-999,-999]
-    ]
-)
-chunk,unsolved_pits_raster = breach_single_cell_pits_in_chunk(chunk,-999)
-print(chunk,unsolved_pits_raster)
