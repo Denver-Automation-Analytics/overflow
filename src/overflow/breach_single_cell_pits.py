@@ -56,7 +56,7 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
                                 pass
                             else:
                                 chunk_copy[row+dy[breachcell[k]],col+dx[breachcell[k]]]=(z+zn)/2
-                                print("pit resolved at",row,col,z,zn)
+                                
                     if unsolved:
                         unsolved_pits_raster[row,col]=1
                         
