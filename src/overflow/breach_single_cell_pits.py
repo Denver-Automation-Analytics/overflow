@@ -78,14 +78,14 @@ def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
     dataset.SetProjection(projection)
     dataset.SetGeoTransform(transform)
     output_band=dataset.GetRasterBand(1)
-    
+    output_band.SetNoDataValue(nodata_value)
     for chunk in raster_chunker(band,chunk_size=chunk_size,chunk_buffer_size=2):
         result,_= breach_single_cell_pits_in_chunk(chunk.data,nodata_value)
         
         chunk.from_numpy(result)
         chunk.write(output_band) 
 
-breach_single_cell_pits("/workspaces/overflow/data/USGS_1M_13_x49y442_CO_DRCOG_2020_B20.tif","/workspaces/overflow/data/test6.tif",chunk_size=1000)
+breach_single_cell_pits("/workspaces/overflow/data/RasterFt.tif","/workspaces/overflow/data/test7.tif",chunk_size=1000)
         
 
 
