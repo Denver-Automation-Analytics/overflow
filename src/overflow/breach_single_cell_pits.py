@@ -1,7 +1,8 @@
 import numpy as np
-from numba import njit
+from numba import njit, prange
 from osgeo import gdal
-from util.raster import raster_chunker
+
+from .util.raster import raster_chunker
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -30,7 +31,8 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
     rows, cols = chunk.shape
     # Loop through each cell in the chunk
     unsolved_pits_raster = np.zeros_like(chunk, dtype=np.int8)
-    for row in range(2,rows-2):
+    # pylint: disable=not-an-iterable
+    for row in prange(2,rows-2):
         for col in range(2,cols-2):
             z=chunk[row,col]
             if z != nodata_value:
