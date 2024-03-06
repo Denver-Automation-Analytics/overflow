@@ -224,7 +224,7 @@ def breach_paths_least_cost_chunk(
                 breach_point_found = True
                 break
             # if the heap size is too large, stop
-            if len(heap) >= search_window_size ** 2:
+            if len(heap) >= search_window_size**2:
                 break  # pit is unsolvable with max heap size
             # for each neighbor of the current cell
             for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
