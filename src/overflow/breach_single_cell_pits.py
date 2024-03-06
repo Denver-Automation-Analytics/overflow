@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from .util.raster import raster_chunker
+from util.raster import raster_chunker
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -84,6 +84,8 @@ def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
         
         chunk.from_numpy(result)
         chunk.write(output_band) 
+
+breach_single_cell_pits("/workspaces/overflow/data/USGS_1M_13_x49y442_CO_DRCOG_2020_B20.tif","/workspaces/overflow/data/test6.tif",chunk_size=1000)
         
 
 
