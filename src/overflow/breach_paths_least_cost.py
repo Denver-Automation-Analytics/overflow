@@ -16,7 +16,7 @@ spec = [
 ]
 
 
-@jitclass(spec)
+# @jitclass(spec)
 class GridCell:
     """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
 
@@ -33,7 +33,7 @@ class GridCell:
         return self.cost == other.cost
 
 
-@njit
+# @njit
 def process_neighbor(
     i: int,
     next_row: int,
@@ -94,7 +94,7 @@ def process_neighbor(
         heapq.heappush(heap, GridCell(next_row, next_col, next_cost))
 
 
-@njit
+# @njit
 def reconstruct_path(
     i: int,
     row: int,
@@ -129,21 +129,29 @@ def reconstruct_path(
         None
     """
     path = []
-    while row != UNVISITED_INDEX and col != UNVISITED_INDEX:
+    while UNVISITED_INDEX not in (row, col):
         path.append((row, col))
         row, col = (
             prev_rows_array[i, row + row_offset, col + col_offset],
             prev_cols_array[i, row + row_offset, col + col_offset],
         )
+    # remove last cell in path since we don't want to modify the pit cell
+    path.pop()
     path_length = len(path)
-    for j, (row, col) in enumerate(path):
+    for j, (path_row, path_col) in enumerate(path):
         # apply gradient to the dem to create the breach path
-        dem[row, col] = (
-            final_elevation + (init_elevation - final_elevation) * j / path_length
-        )
+        if final_elevation == -np.inf:
+            # we're breaching to a nodata cell, so don't modify the first cell
+            if j > 0:
+                # we're breaching to a nodata cell, so assume a small gradient
+                dem[path_row, path_col] = init_elevation - (path_length - j) * 0.01
+        else:
+            dem[path_row, path_col] = (
+                final_elevation + (init_elevation - final_elevation) * j / path_length
+            )
 
 
-@njit(parallel=True)
+# @njit(parallel=True)
 def breach_paths_least_cost_chunk(
     pits: np.ndarray,
     dem: np.ndarray,
@@ -199,7 +207,7 @@ def breach_paths_least_cost_chunk(
         dtype=np.int32,
     )
     # pylint: disable=not-an-iterable
-    for i in prange(pits.shape[0]):
+    for i in range(pits.shape[0]):
         # initialize variables for the search
         current_row = pits[i, 0]
         current_col = pits[i, 1]
@@ -260,6 +268,9 @@ def breach_paths_least_cost_chunk(
                     )
         if breach_point_found:
             final_elevation = dem[current_row, current_col]
+            final_elevation = (
+                final_elevation if final_elevation != dem_no_data_value else -np.inf
+            )
             reconstruct_path(
                 i,
                 current_row,
