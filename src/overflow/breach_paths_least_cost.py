@@ -16,7 +16,7 @@ spec = [
 ]
 
 
-# @jitclass(spec)
+@jitclass(spec)
 class GridCell:
     """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
 
@@ -33,7 +33,7 @@ class GridCell:
         return self.cost == other.cost
 
 
-# @njit
+@njit
 def process_neighbor(
     i: int,
     next_row: int,
@@ -94,7 +94,7 @@ def process_neighbor(
         heapq.heappush(heap, GridCell(next_row, next_col, next_cost))
 
 
-# @njit
+@njit
 def reconstruct_path(
     i: int,
     row: int,
@@ -151,7 +151,7 @@ def reconstruct_path(
             )
 
 
-# @njit(parallel=True)
+@njit(parallel=True)
 def breach_paths_least_cost_chunk(
     pits: np.ndarray,
     dem: np.ndarray,
@@ -207,7 +207,7 @@ def breach_paths_least_cost_chunk(
         dtype=np.int32,
     )
     # pylint: disable=not-an-iterable
-    for i in range(pits.shape[0]):
+    for i in prange(pits.shape[0]):
         # initialize variables for the search
         current_row = pits[i, 0]
         current_col = pits[i, 1]
