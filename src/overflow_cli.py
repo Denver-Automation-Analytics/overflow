@@ -1,7 +1,7 @@
 
 import click
 
-from overflow.breach_single_cell_pits import breach_single_cell_pits
+from overflow.breach_single_cell_pits import breach_single_cell_pits as breach_single_cell_pits_impl
 
 
 @click.group()
@@ -15,6 +15,7 @@ def main():
     help="path to the DEM file",
 )
 @click.option("--output_file", help="path to the output file")
+@click.option("--chunk_size", help="chunk size", default=1000)
 def breach_single_cell_pits(input_file: str, output_file: str, chunk_size: int):
     """
     This function is used to breach single cell pits in a chunk of a DEM.
@@ -32,7 +33,7 @@ def breach_single_cell_pits(input_file: str, output_file: str, chunk_size: int):
     None
     """
     try:
-        breach_single_cell_pits(input_file, output_file, chunk_size=2000)
+        breach_single_cell_pits_impl(input_file, output_file, chunk_size)
     except Exception as exc:
         print(
             f"breach_single_cell_pits failed with the following exception: {str(exc)}"
