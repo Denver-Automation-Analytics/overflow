@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from osgeo import gdal
-from overflow.util.raster import raster_chunker
+
 from overflow.breach_single_cell_pits import breach_single_cell_pits_in_chunk,breach_single_cell_pits
 
 
