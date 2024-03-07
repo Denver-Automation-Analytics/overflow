@@ -8,7 +8,7 @@ def main():
     """The main entry point for the command line interface."""
 
 
-@main.command()
+@main.command(name="breach-single-cell-pits")
 @click.option(
     "--input_file",
     help="path to the DEM file",
