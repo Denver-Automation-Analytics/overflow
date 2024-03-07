@@ -5,7 +5,6 @@
 		"context": ".."
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/aws-cli:1": {},
 		"ghcr.io/devcontainers/features/git:1": {},
 		"ghcr.io/mamba-org/devcontainer-features/micromamba:1": {
 			"envFile": "/tmp/env.yaml",
@@ -14,10 +13,6 @@
 			"version": "1.5.6"
 		}
 	},
-	// mount aws credentials folder to dev container
-	"mounts": [
-		"source=${localEnv:HOME}${localEnv:USERPROFILE}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached"
-	],
 	"runArgs": [
 		"--gpus",
 		"all"

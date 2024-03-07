@@ -7,7 +7,6 @@ jobs:
   test:
     name: Lint and Test
     runs-on: ubuntu-latest
-    environment: dev
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -26,5 +25,5 @@ jobs:
       - name: Run pylint and pytest
         shell: bash -el {0}
         run: |
+          pylint --fail-under=9 --fail-on=E ./src* ./tests*
           pytest
-          pylint --fail-under=9 ./src* ./tests*
