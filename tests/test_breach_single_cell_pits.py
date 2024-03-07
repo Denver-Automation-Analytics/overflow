@@ -8,8 +8,8 @@ from overflow.breach_single_cell_pits import (
 )
 
 
-@pytest.fixture
-def raster_file_path():
+@pytest.fixture(name="raster_file_path")
+def fixture_raster_file_path():
     """Create a random raster band for testing.
 
     Yields:
