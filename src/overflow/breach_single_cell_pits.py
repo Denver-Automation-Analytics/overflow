@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from util.raster import raster_chunker
+from .util.raster import raster_chunker
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -26,8 +26,7 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
     dy2=[-2,-1,0,1,2,2,2,2,2,1,0,-1,-2,-2,-2,-2]
     breachcell=[0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,0]
     # Create a copy of the chunk
-    chunk_copy = chunk.copy()
-    # Get the shape of the chunk
+    
     rows, cols = chunk.shape
     # Loop through each cell in the chunk
     unsolved_pits_raster = np.zeros_like(chunk, dtype=np.int8)
@@ -38,32 +37,27 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
             if z != nodata_value:
                 flag = True
                 for k in range(8):
-                    
-                    if int(row+dy[k]) < 0 or int(col+dx[k]) < 0 :
-                        pass
-                    else:
-                        zn=chunk[row+dy[k],col+dx[k]]
-                        
-                        if zn < z and zn != nodata_value:
-                            flag = False
-                            break
+                    zn=chunk[row+dy[k],col+dx[k]]
+                    if zn < z and zn != nodata_value:
+                        flag = False
+                        break
                             
                 if flag:
-                    unsolved=True
-                    for k in range(16):
-                        zn=chunk[row+dy2[k],col+dx2[k]]
-                        if zn < z and zn != nodata_value:
-                            unsolved=False
-                            if int(row+dy[breachcell[k]]) < 0 or int(col+dx[breachcell[k]]) < 0:
-                                pass
-                            else:
-                                chunk_copy[row+dy[breachcell[k]],col+dx[breachcell[k]]]=(z+zn)/2
-                                
-                    if unsolved:
-                        unsolved_pits_raster[row,col]=1
+                    unsolved_pits_raster[row,col] = 1
+                    
+    pit_indicies=np.argwhere(unsolved_pits_raster == 1)            
+    
+    for row,col in pit_indicies:
+        z=chunk[row,col]
+        for k in range(16):
+            zn=chunk[row+dy2[k],col+dx2[k]]
+            if zn < z and zn != nodata_value:
+                solved=True
+                chunk[row+dy[breachcell[k]],col+dx[breachcell[k]]]=(z+zn)/2
+        if solved:
+            unsolved_pits_raster[row,col]=0
                         
-
-    return chunk_copy,unsolved_pits_raster
+    return unsolved_pits_raster
 
 def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
     input_raster = gdal.Open(input_path)
@@ -80,12 +74,9 @@ def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
     output_band=dataset.GetRasterBand(1)
     output_band.SetNoDataValue(nodata_value)
     for chunk in raster_chunker(band,chunk_size=chunk_size,chunk_buffer_size=2):
-        result,_= breach_single_cell_pits_in_chunk(chunk.data,nodata_value)
-        
-        chunk.from_numpy(result)
+        _= breach_single_cell_pits_in_chunk(chunk.data,nodata_value)
         chunk.write(output_band) 
 
-breach_single_cell_pits("/workspaces/overflow/data/RasterFt.tif","/workspaces/overflow/data/test7.tif",chunk_size=1000)
         
 
 
