@@ -2,6 +2,7 @@ from typing import Iterator
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
+
 gdal.UseExceptions()
 
 
@@ -190,8 +191,10 @@ def raster_chunker(
     n_chunks_row = (band.YSize + chunk_size - 1) // chunk_size
     n_chunks_col = (band.XSize + chunk_size - 1) // chunk_size
     # Iterate over the chunks
-    
-    for chunk_row in tqdm(range(n_chunks_row),desc=f"Processing {n_chunks_row} raster chunks"):
+
+    for chunk_row in tqdm(
+        range(n_chunks_row), desc=f"Processing {n_chunks_row} raster chunks"
+    ):
         for chunk_col in range(n_chunks_col):
             # Read the chunk and yield it
             chunk = RasterChunk(
