@@ -1,13 +1,18 @@
 import math
 import heapq
 from numba import njit, prange
+from osgeo import gdal
 import numpy as np
-from .util.raster import GridCell
+from .util.raster import GridCell, raster_chunker
+from .breach_single_cell_pits import breach_single_cell_pits_in_chunk
 
 # constants
-DEFAULT_SEARCH_RADIUS = 100
-DEFAULT_MAX_PITS = 100
+DEFAULT_SEARCH_RADIUS = 200
+DEFAULT_MAX_PITS = 10
 UNVISITED_INDEX = -1
+EPSILON_GRADIENT = (
+    1e-10  # small value to apply to gradient of breaching to nodata cells
+)
 
 
 @njit
@@ -60,7 +65,10 @@ def process_neighbor(
     next_elevation = dem[next_row, next_col]
     if next_elevation == dem_no_data_value or math.isnan(next_elevation):
         next_elevation = -np.inf  # nodata cells are treated as most negative elevation
-    next_cost = current_cost + multiplier * (next_elevation - init_elevation)
+    if next_elevation != -np.inf:
+        next_cost = current_cost + multiplier * (next_elevation - init_elevation)
+    else:
+        next_cost = current_cost
     # if the cost is less than the current cost of the neighbor
     if next_cost < costs_array[i, next_row + row_offset, next_col + col_offset]:
         # update the cost and previous cell of the neighbor
@@ -121,7 +129,9 @@ def reconstruct_path(
             # we're breaching to a nodata cell, so don't modify the first cell
             if j > 0:
                 # we're breaching to a nodata cell, so assume a small gradient
-                dem[path_row, path_col] = init_elevation - (path_length - j) * 0.01
+                dem[path_row, path_col] = (
+                    init_elevation - (path_length - j) * EPSILON_GRADIENT
+                )
         else:
             dem[path_row, path_col] = (
                 final_elevation + (init_elevation - final_elevation) * j / path_length
@@ -129,7 +139,7 @@ def reconstruct_path(
 
 
 @njit(parallel=True)
-def breach_pits_least_cost(
+def breach_pits_in_chunk_least_cost(
     pits: np.ndarray,
     dem: np.ndarray,
     dem_no_data_value: float,
@@ -170,6 +180,16 @@ def breach_pits_least_cost(
     if search_radius <= 0 or not isinstance(search_radius, int):
         raise ValueError("search_radius must be a positive integer")
     search_window_size = 2 * search_radius + 1
+    neighbors = [
+        (0, 1),  # Right
+        (1, 0),  # Down
+        (0, -1),  # Left
+        (-1, 0),  # Up
+        (-1, -1),  # Upper Left
+        (-1, 1),  # Upper Right
+        (1, -1),  # Lower Left
+        (1, 1),  # Lower Right
+    ]
     # pylint: disable=not-an-iterable
     for i in prange(pits.shape[0]):
         # initialize variables for the search
@@ -199,7 +219,7 @@ def breach_pits_least_cost(
             if len(heap) >= search_window_size**2:
                 break  # pit is unsolvable with max heap size
             # for each neighbor of the current cell
-            for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            for dr, dc in neighbors:
                 next_row, next_col = current_row + dr, current_col + dc
                 # Calculate the cost considering diagonal movement
                 multiplier = 1 if dr == 0 or dc == 0 else math.sqrt(2)
@@ -211,6 +231,8 @@ def breach_pits_least_cost(
                     and 0 <= next_row + row_offset < search_window_size
                     and 0 <= next_col + col_offset < search_window_size
                 )
+                if not is_in_bounds:
+                    continue
                 if is_in_bounds:
                     process_neighbor(
                         i,
@@ -253,43 +275,89 @@ def breach_pits_least_cost(
     prev_cols_array.fill(UNVISITED_INDEX)
 
 
-def breach_all_pits_least_cost(
+def breach_all_pits_in_chunk_least_cost(
     pits: np.ndarray,
     dem: np.ndarray,
     dem_no_data_value: float,
+    costs_array: np.ndarray,
+    prev_rows_array: np.ndarray,
+    prev_cols_array: np.ndarray,
     search_radius: int = DEFAULT_SEARCH_RADIUS,
     max_pits: int = DEFAULT_MAX_PITS,
 ):
     """
-    Compute least-cost paths for all breach points within a given search radius. This function wraps
-    breach_pits_least_cost and splits the pits into chunks to avoid memory overflow.
+    Compute least-cost paths for all breach points within a given search radius. This function
+    preallocates memory for the cost and backlink rasters and wraps breach_pits_least_cost
+    to split the pits into chunks and avoid memory overflow.
     """
+    # split the pits into chunks to avoid memory overflow
+    for i in range(0, pits.shape[0], max_pits):
+        chunk_pits = pits[i : i + max_pits]
+        breach_pits_in_chunk_least_cost(
+            chunk_pits,
+            dem,
+            dem_no_data_value,
+            costs_array,
+            prev_rows_array,
+            prev_cols_array,
+            search_radius,
+        )
+
+
+def breach_paths_least_cost(
+    input_path,
+    output_path,
+    chunk_size=2000,
+    search_radius=DEFAULT_SEARCH_RADIUS,
+    max_pits=DEFAULT_MAX_PITS,
+):
+    input_ds = gdal.Open(input_path)
+    projection = input_ds.GetProjection()
+    geotransform = input_ds.GetGeoTransform()
+    input_band = input_ds.GetRasterBand(1)
+    input_nodata = input_band.GetNoDataValue()
+    driver = gdal.GetDriverByName("GTiff")
+    output_ds = driver.Create(
+        output_path, input_ds.RasterXSize, input_ds.RasterYSize, 1, gdal.GDT_Float32
+    )
+    output_ds.SetProjection(projection)
+    output_ds.SetGeoTransform(geotransform)
+    output_band = output_ds.GetRasterBand(1)
+    output_band.SetNoDataValue(input_nodata)
+
     # allocate memory for the costs and previous cells
     search_window_size = 2 * search_radius + 1
     chunk_costs_array = np.full(
-        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        (max_pits, search_window_size, search_window_size),
         np.inf,
         dtype=np.float32,
     )
     chunk_prev_rows_array = np.full(
-        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        (max_pits, search_window_size, search_window_size),
         UNVISITED_INDEX,
         dtype=np.int64,
     )
     chunk_prev_cols_array = np.full(
-        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        (max_pits, search_window_size, search_window_size),
         UNVISITED_INDEX,
         dtype=np.int64,
     )
-    # split the pits into chunks to avoid memory overflow
-    for i in range(0, pits.shape[0], max_pits):
-        chunk_pits = pits[i : i + max_pits]
-        breach_pits_least_cost(
-            chunk_pits,
-            dem,
-            dem_no_data_value,
+
+    for chunk in raster_chunker(
+        input_band, chunk_size=chunk_size, chunk_buffer_size=search_radius
+    ):
+        pits_raster = breach_single_cell_pits_in_chunk(chunk.data, input_nodata)
+        pits_array = np.argwhere(pits_raster == 1)
+        breach_all_pits_in_chunk_least_cost(
+            pits_array,
+            chunk.data,
+            input_nodata,
             chunk_costs_array,
             chunk_prev_rows_array,
             chunk_prev_cols_array,
             search_radius,
+            max_pits,
         )
+        chunk.write(output_band)
+    input_ds = None
+    output_ds = None

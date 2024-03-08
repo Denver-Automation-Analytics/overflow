@@ -41,7 +41,7 @@ def breach_single_cell_pits_in_chunk(
                 flag = True
                 for k in range(8):
                     zn = chunk[row + dy[k], col + dx[k]]
-                    if zn < z and zn != nodata_value:
+                    if zn <= z or zn == nodata_value:
                         flag = False
                         break
 
@@ -51,6 +51,7 @@ def breach_single_cell_pits_in_chunk(
     pit_indicies = np.argwhere(unsolved_pits_raster == 1)
 
     for row, col in pit_indicies:
+        solved = False
         z = chunk[row, col]
         for k in range(16):
             zn = chunk[row + dy2[k], col + dx2[k]]
