@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from overflow.breach_paths_least_cost import breach_paths_least_cost_chunk
+from overflow.breach_paths_least_cost import breach_all_pits_least_cost
 
 # pylint does not understand pytest fixtures
 # pylint: disable=redefined-outer-name
@@ -39,7 +39,7 @@ def dem_with_pit_and_nodata():
 def test_breach_paths_least_cost_chunk(dem_with_pit):
     """Test that the expected breach path is created."""
     pits = np.array([[2, 2]])
-    breach_paths_least_cost_chunk(pits, dem_with_pit, -9999)
+    breach_all_pits_least_cost(pits, dem_with_pit, -9999)
     expected_dem = np.array(
         [
             [1, 1, -2, 1, 1],
@@ -56,7 +56,7 @@ def test_breach_paths_least_cost_chunk(dem_with_pit):
 def test_breach_paths_least_cost_chunk_with_nodata(dem_with_pit_and_nodata):
     """Test that the expected breach path is created."""
     pits = np.array([[2, 2]])
-    breach_paths_least_cost_chunk(pits, dem_with_pit_and_nodata, -9999)
+    breach_all_pits_least_cost(pits, dem_with_pit_and_nodata, -9999)
     expected_dem = np.array(
         [
             [1, 1, -9999, 1, 1],

@@ -1,36 +1,13 @@
 import math
 import heapq
-from numba import njit, prange, int32, float32
-from numba.experimental import jitclass
+from numba import njit, prange
 import numpy as np
+from .util.raster import GridCell
 
 # constants
 DEFAULT_SEARCH_RADIUS = 100
+DEFAULT_MAX_PITS = 100
 UNVISITED_INDEX = -1
-
-# Define the Numba specification for the GridCell jitclass
-spec = [
-    ("row", int32),
-    ("column", int32),
-    ("cost", float32),
-]
-
-
-@jitclass(spec)
-class GridCell:
-    """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
-
-    def __init__(self, row, column, cost):
-        self.row = row
-        self.column = column
-        self.cost = cost
-
-    # Define comparison methods based on the cost attribute so this can be used in a heapq
-    def __lt__(self, other):
-        return self.cost < other.cost
-
-    def __eq__(self, other):
-        return self.cost == other.cost
 
 
 @njit
@@ -152,10 +129,13 @@ def reconstruct_path(
 
 
 @njit(parallel=True)
-def breach_paths_least_cost_chunk(
+def breach_pits_least_cost(
     pits: np.ndarray,
     dem: np.ndarray,
     dem_no_data_value: float,
+    costs_array: np.ndarray,
+    prev_rows_array: np.ndarray,
+    prev_cols_array: np.ndarray,
     search_radius: int = DEFAULT_SEARCH_RADIUS,
 ):
     """
@@ -189,23 +169,7 @@ def breach_paths_least_cost_chunk(
     """
     if search_radius <= 0 or not isinstance(search_radius, int):
         raise ValueError("search_radius must be a positive integer")
-    # allocate memory for the costs and previous cells
     search_window_size = 2 * search_radius + 1
-    costs_array = np.full(
-        (pits.shape[0], search_window_size, search_window_size),
-        np.inf,
-        dtype=np.float32,
-    )
-    prev_rows_array = np.full(
-        (pits.shape[0], search_window_size, search_window_size),
-        UNVISITED_INDEX,
-        dtype=np.int32,
-    )
-    prev_cols_array = np.full(
-        (pits.shape[0], search_window_size, search_window_size),
-        UNVISITED_INDEX,
-        dtype=np.int32,
-    )
     # pylint: disable=not-an-iterable
     for i in prange(pits.shape[0]):
         # initialize variables for the search
@@ -283,3 +247,49 @@ def breach_paths_least_cost_chunk(
                 row_offset,
                 col_offset,
             )
+    # reset the costs and previous cells to their initial values
+    costs_array.fill(np.inf)
+    prev_rows_array.fill(UNVISITED_INDEX)
+    prev_cols_array.fill(UNVISITED_INDEX)
+
+
+def breach_all_pits_least_cost(
+    pits: np.ndarray,
+    dem: np.ndarray,
+    dem_no_data_value: float,
+    search_radius: int = DEFAULT_SEARCH_RADIUS,
+    max_pits: int = DEFAULT_MAX_PITS,
+):
+    """
+    Compute least-cost paths for all breach points within a given search radius. This function wraps
+    breach_pits_least_cost and splits the pits into chunks to avoid memory overflow.
+    """
+    # allocate memory for the costs and previous cells
+    search_window_size = 2 * search_radius + 1
+    chunk_costs_array = np.full(
+        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        np.inf,
+        dtype=np.float32,
+    )
+    chunk_prev_rows_array = np.full(
+        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        UNVISITED_INDEX,
+        dtype=np.int64,
+    )
+    chunk_prev_cols_array = np.full(
+        (min(pits.shape[0], max_pits), search_window_size, search_window_size),
+        UNVISITED_INDEX,
+        dtype=np.int64,
+    )
+    # split the pits into chunks to avoid memory overflow
+    for i in range(0, pits.shape[0], max_pits):
+        chunk_pits = pits[i : i + max_pits]
+        breach_pits_least_cost(
+            chunk_pits,
+            dem,
+            dem_no_data_value,
+            chunk_costs_array,
+            chunk_prev_rows_array,
+            chunk_prev_cols_array,
+            search_radius,
+        )
