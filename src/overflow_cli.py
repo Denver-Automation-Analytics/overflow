@@ -1,8 +1,6 @@
 import click
 
-from overflow.breach_single_cell_pits import (
-    breach_single_cell_pits as breach_single_cell_pits_impl,
-)
+from overflow.breach_single_cell_pits import breach_single_cell_pits
 
 
 @click.group()
@@ -33,7 +31,7 @@ def breach_single_cell_pits_cli(input_file: str, output_file: str, chunk_size: i
     None
     """
     try:
-        breach_single_cell_pits_impl(input_file, output_file, chunk_size)
+        breach_single_cell_pits(input_file, output_file, chunk_size)
     except Exception as exc:
         print(
             f"breach_single_cell_pits failed with the following exception: {str(exc)}"
