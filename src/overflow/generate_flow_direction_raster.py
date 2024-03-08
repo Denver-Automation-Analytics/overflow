@@ -5,7 +5,6 @@ from osgeo import gdal
 from .util.raster import raster_chunker
 
 
-
 @njit(parallel=True)
 def generate_flow_direction_raster(
     chunk, cell_size, nodata_value
