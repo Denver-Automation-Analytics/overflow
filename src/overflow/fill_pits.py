@@ -34,6 +34,7 @@ def process_tile(dem, is_edge_tile=False):
     label_counter = 2
 
     rows, cols = dem.shape
+    # TODO we push and pop dummy value to get numba to compile
     open_cells = [GridCell(0, 0, dem[0, 0])]
     heapq.heapify(open_cells)
     pit_cells = [GridCell(0, 0, dem[0, 0])]
@@ -125,9 +126,14 @@ def process_tile(dem, is_edge_tile=False):
 np.random.seed(32)
 dem = np.random.randint(10, 50, size=(5, 5)).astype(np.float32)
 print(dem)
+dem_copy = dem.copy()
 # Process tile
 start_time = time.time()
 labels, graph = process_tile(dem, True)
+end_time = time.time()
+print(f'Filling the pits took {end_time - start_time} seconds')
+start_time = time.time()
+labels, graph = process_tile(dem_copy, True)
 end_time = time.time()
 print(f'Filling the pits took {end_time - start_time} seconds')
 print(dem)
