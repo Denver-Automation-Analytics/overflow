@@ -238,11 +238,13 @@ def priority_flood_fill(dem: np.array):
 
 # set a random seed for repeatable results
 np.random.seed(32)
-test_dem_input = np.random.randint(10, 50, size=(100, 100))
-test_dem_input_copy = test_dem_input.copy()
+test_dem_input = np.random.randint(10, 50, size=(5, 5))
+print(test_dem_input)
+
 
 # fill the pits in the DEM
 start_time = time.time()
 filled_dem = priority_flood_fill(test_dem_input)
 end_time = time.time()
 print(f'Filling the pits took {end_time - start_time} seconds')
+print(filled_dem)
