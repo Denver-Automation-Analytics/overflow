@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 from util.raster import raster_chunker
+from breach_single_cell_pits import breach_single_cell_pits_in_chunk
 
 
 
@@ -38,7 +39,9 @@ def generate_flow_direction_raster(chunk,cell_size,nodata_value)-> tuple[np.ndar
             if z != nodata_value:
                 slopes=[]
                 for k in range(8):
-                    if chunk[row+dy[k],col+dx[k]] != nodata_value:
+                    if chunk[row+dy[k],col+dx[k]] == nodata_value:
+                        slopes.append(-9999)
+                    else:
                         if k in [1,3,5,7]:
                             slopes.append((z - chunk[row+dy[k],col+dx[k]])/cell_size)
                         else:
@@ -47,9 +50,12 @@ def generate_flow_direction_raster(chunk,cell_size,nodata_value)-> tuple[np.ndar
                 for slope in slopes:
                     if slope != slopes[0]:
                         m=max(slopes)
-                        index_max=slopes.index(m)
-                        chunk_copy[row,col]=d8_directions_dict[index_max]
-                        break
+                        if m < 0:
+                            chunk_copy[row,col]=255
+                        else:
+                            index_max=slopes.index(m)
+                            chunk_copy[row,col]=d8_directions_dict[index_max]
+                            break
                     else:
                         chunk_copy[row,col]=255
                 
@@ -79,4 +85,19 @@ def flow_direction_from_chunks(input_path,output_path,chunk_size=1000):
     
         
 
-flow_direction_from_chunks("/workspaces/overflow/data/test7.tif","/workspaces/overflow/data/testFDIR11.tif",chunk_size=1000)
+chunk = np.array(
+    [   [-999,-999,-999, -999, -999, -999, -999,-999,-999],
+        [-999,-999,-999, -999, -999, -999, -999,-999,-999],
+        [-999,-999,100, 101, 90, 97, 90,-999,-999],
+        [-999, -999,103, 102, 80, 96, 95,-999,-999],
+        [-999, -999,94, 95, 96, 95, 94,-999,-999],
+        [-999, -999,97, 98, 95, 94, 90,-999,-999],
+        [-999, -999,95, 90, 85, 40, 92,-999,-999],
+        [-999,-999,-999, -999, -999, -999, -999,-999,-999],
+        [-999,-999,-999, -999, -999, -999, -999,-999,-999]
+    ]
+    )
+chunk,unsolved=breach_single_cell_pits_in_chunk(chunk,-999)
+print(chunk,unsolved)
+fdir=generate_flow_direction_raster(chunk,1,-999)
+print(fdir)

@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from .util.raster import raster_chunker
+from util.raster import raster_chunker
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -49,6 +49,7 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
     
     for row,col in pit_indicies:
         z=chunk[row,col]
+        solved=False
         for k in range(16):
             zn=chunk[row+dy2[k],col+dx2[k]]
             if zn < z and zn != nodata_value:
@@ -57,7 +58,7 @@ def breach_single_cell_pits_in_chunk(chunk,nodata_value)-> tuple[np.ndarray,np.n
         if solved:
             unsolved_pits_raster[row,col]=0
                         
-    return unsolved_pits_raster
+    return chunk,unsolved_pits_raster
 
 def breach_single_cell_pits(input_path,output_path,chunk_size=2000):
     input_raster = gdal.Open(input_path)
