@@ -1,9 +1,10 @@
+import math
 import numpy as np
 from numba import njit, prange
 from osgeo import gdal
-from breach_single_cell_pits import breach_single_cell_pits_in_chunk
 from util.raster import raster_chunker
-import math
+
+
 
 @njit(parallel=True)
 def generate_flow_direction_raster(chunk,cell_size,nodata_value)-> tuple[np.ndarray,np.ndarray] :
@@ -21,7 +22,7 @@ def generate_flow_direction_raster(chunk,cell_size,nodata_value)-> tuple[np.ndar
     np.ndarray
         A chunk of a DEM with flow direction values.
     """
-    D8_Directions_Dict={0:1,1:2,2:4,3:8,4:16,5:32,6:64,7:128,8:255}
+    d8_directions_dict={0:128,1:1,2:2,3:4,4:8,5:16,6:32,7:64}
     dx=[1,1,1,0,-1,-1,-1,0]
     dy=[-1,0,1,1,1,0,-1,-1]
 
@@ -31,24 +32,26 @@ def generate_flow_direction_raster(chunk,cell_size,nodata_value)-> tuple[np.ndar
     # Loop through each cell in the chunk
     
     # pylint: disable=not-an-iterable
-    for row in range(2,rows-2):
+    for row in prange(2,rows-2):
         for col in range(2,cols-2):
             z=chunk[row,col]
             if z != nodata_value:
                 slopes=[]
                 for k in range(8):
                     if chunk[row+dy[k],col+dx[k]] != nodata_value:
-                        if k % 2 != 0 or k != 0:
+                        if k in [1,3,5,7]:
                             slopes.append((z - chunk[row+dy[k],col+dx[k]])/cell_size)
                         else:
                             slopes.append((z - chunk[row+dy[k],col+dx[k]])/math.sqrt(cell_size**2+cell_size**2))
             if z != nodata_value:
-                m=max(slopes)
-                
-                #print("slope:",m)
-                index_max=slopes.index(m)
-                #print("Max index:",index_max)
-                chunk_copy[row,col]=D8_Directions_Dict[index_max]
+                for slope in slopes:
+                    if slope != slopes[0]:
+                        m=max(slopes)
+                        index_max=slopes.index(m)
+                        chunk_copy[row,col]=d8_directions_dict[index_max]
+                        break
+                    else:
+                        chunk_copy[row,col]=255
                 
                  
     return chunk_copy
