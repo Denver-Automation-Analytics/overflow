@@ -3,14 +3,9 @@ import pytest
 from osgeo import gdal
 from overflow.util.raster import raster_chunker, read_raster_with_bounds_handling
 
-# pylint does not understand pytest fixtures
-# pylint: disable=redefined-outer-name
-# allow protected access for testing
-# pylint: disable=protected-access
 
-
-@pytest.fixture
-def raster_band():
+@pytest.fixture(name="raster_band")
+def fixture_raster_band():
     """Create a random raster band for testing.
 
     Yields:

@@ -61,11 +61,12 @@ def breach_single_cell_pits_in_chunk(
         if solved:
             unsolved_pits_raster[row, col] = 0
 
-    return chunk, unsolved_pits_raster
+
+    return unsolved_pits_raster
 
 
 def breach_single_cell_pits(input_path, output_path, chunk_size=2000):
-    """
+   """
     This function is used to breach single cell pits in a DEM raster.
     """
     input_raster = gdal.Open(input_path)

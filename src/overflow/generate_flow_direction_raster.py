@@ -74,7 +74,7 @@ def generate_flow_direction_raster(
                     else:
                         index_max = slopes.index(m)
                         chunk_copy[row, col] = d8_directions_dict[index_max]
-
+                        
     return chunk_copy
 
 
@@ -105,3 +105,4 @@ def flow_direction_from_chunks(input_path, output_path, chunk_size=1000):
         result = generate_flow_direction_raster(chunk.data, cell_size, nodata_value)
         chunk.from_numpy(result)
         chunk.write(output_band)
+
