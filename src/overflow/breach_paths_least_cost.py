@@ -3,16 +3,14 @@ import heapq
 from numba import njit, prange
 from osgeo import gdal
 import numpy as np
-from .util.raster import GridCell, raster_chunker
+from .util.raster import GridCell, raster_chunker, DEFAULT_CHUNK_SIZE
 from .breach_single_cell_pits import breach_single_cell_pits_in_chunk
 
 # constants
 DEFAULT_SEARCH_RADIUS = 200
-DEFAULT_MAX_PITS = 10
+DEFAULT_MAX_PITS = 24
 UNVISITED_INDEX = -1
-EPSILON_GRADIENT = (
-    1e-10  # small value to apply to gradient of breaching to nodata cells
-)
+EPSILON_GRADIENT = 1e-5  # small value to apply to gradient of breaching to nodata cells
 
 
 @njit
@@ -129,12 +127,17 @@ def reconstruct_path(
             # we're breaching to a nodata cell, so don't modify the first cell
             if j > 0:
                 # we're breaching to a nodata cell, so assume a small gradient
-                dem[path_row, path_col] = (
-                    init_elevation - (path_length - j) * EPSILON_GRADIENT
+                dem[path_row, path_col] = min(
+                    (init_elevation - (path_length - j) * EPSILON_GRADIENT),
+                    dem[path_row, path_col],
                 )
         else:
-            dem[path_row, path_col] = (
-                final_elevation + (init_elevation - final_elevation) * j / path_length
+            dem[path_row, path_col] = min(
+                (
+                    final_elevation
+                    + (init_elevation - final_elevation) * j / path_length
+                ),
+                dem[path_row, path_col],
             )
 
 
@@ -146,6 +149,7 @@ def breach_pits_in_chunk_least_cost(
     costs_array: np.ndarray,
     prev_rows_array: np.ndarray,
     prev_cols_array: np.ndarray,
+    output_dem: np.ndarray,
     search_radius: int = DEFAULT_SEARCH_RADIUS,
 ):
     """
@@ -171,10 +175,10 @@ def breach_pits_in_chunk_least_cost(
         ValueError: If the search_radius is not a positive integer.
 
     Notes:
-        - This function modifies the DEM in-place to create the least-cost paths.
-        - Parallel execution is utilized for processing multiple pits simultaneously, enhancing performance,
-          but it may encounter race conditions on occasion that may leave pits unsolved.
-        - The search_radius must be a positive integer.
+        - This function modifies the output_dem in-place to create the least-cost paths.
+        - Parallel execution is utilized for processing multiple pits simultaneously.
+        - The search_radius must be a positive integer. Only pits that can be solved within the search radius will be
+            breached.
         - The DEM should have valid elevation values, and dem_no_data_value should be set accordingly for nodata cells.
     """
     if search_radius <= 0 or not isinstance(search_radius, int):
@@ -190,37 +194,50 @@ def breach_pits_in_chunk_least_cost(
         (1, -1),  # Lower Left
         (1, 1),  # Lower Right
     ]
+    # list of locals for each thread
+    breach_point_found = np.zeros(pits.shape[0], dtype=np.bool_)
+    current_row = np.full(pits.shape[0], -1, dtype=np.int64)
+    current_col = np.full(pits.shape[0], -1, dtype=np.int64)
+    init_elevation = np.full(pits.shape[0], math.nan, dtype=np.float32)
+    row_offset = np.full(pits.shape[0], -1, dtype=np.int64)
+    col_offset = np.full(pits.shape[0], -1, dtype=np.int64)
     # pylint: disable=not-an-iterable
     for i in prange(pits.shape[0]):
         # initialize variables for the search
-        current_row = pits[i, 0]
-        current_col = pits[i, 1]
+        current_row[i] = pits[i, 0]
+        current_col[i] = pits[i, 1]
         current_cost = 0
-        init_elevation = dem[current_row, current_col]
-        row_offset = search_radius - current_row
-        col_offset = search_radius - current_col
-        costs_array[i, current_row + row_offset, current_col + col_offset] = 0
-        heap = [GridCell(current_row, current_col, current_cost)]
+        init_elevation[i] = dem[current_row[i], current_col[i]]
+        row_offset[i] = search_radius - current_row[i]
+        col_offset[i] = search_radius - current_col[i]
+        costs_array[
+            i, current_row[i] + row_offset[i], current_col[i] + col_offset[i]
+        ] = 0
+        heap = [GridCell(current_row[i], current_col[i], current_cost)]
         heapq.heapify(heap)
-        breach_point_found = False
+        breach_point_found[i] = False
         while len(heap) > 0:
             # dequeue the cell with the lowest cost
             cell = heapq.heappop(heap)
-            current_cost, current_row, current_col = cell.cost, cell.row, cell.column
+            current_cost, current_row[i], current_col[i] = (
+                cell.cost,
+                cell.row,
+                cell.column,
+            )
             # if this cell can be breached, stop
             if (
-                dem[current_row, current_col] < init_elevation
-                or dem[current_row, current_col] == dem_no_data_value
-                or math.isnan(dem[current_row, current_col])
+                dem[current_row[i], current_col[i]] < init_elevation[i]
+                or dem[current_row[i], current_col[i]] == dem_no_data_value
+                or math.isnan(dem[current_row[i], current_col[i]])
             ):
-                breach_point_found = True
+                breach_point_found[i] = True
                 break
             # if the heap size is too large, stop
             if len(heap) >= search_window_size**2:
                 break  # pit is unsolvable with max heap size
             # for each neighbor of the current cell
             for dr, dc in neighbors:
-                next_row, next_col = current_row + dr, current_col + dc
+                next_row, next_col = current_row[i] + dr, current_col[i] + dc
                 # Calculate the cost considering diagonal movement
                 multiplier = 1 if dr == 0 or dc == 0 else math.sqrt(2)
                 is_in_bounds = (
@@ -228,8 +245,8 @@ def breach_pits_in_chunk_least_cost(
                     0 <= next_row < dem.shape[0]
                     and 0 <= next_col < dem.shape[1]
                     # check if the cell is inside the search window
-                    and 0 <= next_row + row_offset < search_window_size
-                    and 0 <= next_col + col_offset < search_window_size
+                    and 0 <= next_row + row_offset[i] < search_window_size
+                    and 0 <= next_col + col_offset[i] < search_window_size
                 )
                 if not is_in_bounds:
                     continue
@@ -238,10 +255,10 @@ def breach_pits_in_chunk_least_cost(
                         i,
                         next_row,
                         next_col,
-                        row_offset,
-                        col_offset,
+                        row_offset[i],
+                        col_offset[i],
                         current_cost,
-                        init_elevation,
+                        init_elevation[i],
                         dem,
                         dem_no_data_value,
                         costs_array,
@@ -249,25 +266,26 @@ def breach_pits_in_chunk_least_cost(
                         prev_cols_array,
                         heap,
                         multiplier,
-                        current_row,
-                        current_col,
+                        current_row[i],
+                        current_col[i],
                     )
-        if breach_point_found:
-            final_elevation = dem[current_row, current_col]
+    for i in range(pits.shape[0]):
+        if breach_point_found[i]:
+            final_elevation = dem[current_row[i], current_col[i]]
             final_elevation = (
                 final_elevation if final_elevation != dem_no_data_value else -np.inf
             )
             reconstruct_path(
                 i,
-                current_row,
-                current_col,
+                current_row[i],
+                current_col[i],
                 final_elevation,
-                init_elevation,
-                dem,
+                init_elevation[i],
+                output_dem,
                 prev_rows_array,
                 prev_cols_array,
-                row_offset,
-                col_offset,
+                row_offset[i],
+                col_offset[i],
             )
     # reset the costs and previous cells to their initial values
     costs_array.fill(np.inf)
@@ -291,6 +309,7 @@ def breach_all_pits_in_chunk_least_cost(
     to split the pits into chunks and avoid memory overflow.
     """
     # split the pits into chunks to avoid memory overflow
+    output_dem = dem.copy()
     for i in range(0, pits.shape[0], max_pits):
         chunk_pits = pits[i : i + max_pits]
         breach_pits_in_chunk_least_cost(
@@ -300,17 +319,48 @@ def breach_all_pits_in_chunk_least_cost(
             costs_array,
             prev_rows_array,
             prev_cols_array,
+            output_dem,
             search_radius,
         )
+    return output_dem
+
+
+def allocate_memory_for_costs_and_prev_cells(
+    search_window_size: int,
+    max_pits: int,
+):
+    """
+    Allocate memory for the costs and previous cells arrays.
+    """
+    chunk_costs_array = np.full(
+        (max_pits, search_window_size, search_window_size),
+        np.inf,
+        dtype=np.float32,
+    )
+    chunk_prev_rows_array = np.full(
+        (max_pits, search_window_size, search_window_size),
+        UNVISITED_INDEX,
+        dtype=np.int64,
+    )
+    chunk_prev_cols_array = np.full(
+        (max_pits, search_window_size, search_window_size),
+        UNVISITED_INDEX,
+        dtype=np.int64,
+    )
+    return chunk_costs_array, chunk_prev_rows_array, chunk_prev_cols_array
 
 
 def breach_paths_least_cost(
     input_path,
     output_path,
-    chunk_size=2000,
+    chunk_size=DEFAULT_CHUNK_SIZE,
     search_radius=DEFAULT_SEARCH_RADIUS,
     max_pits=DEFAULT_MAX_PITS,
 ):
+    """Main function to breach paths in a DEM using least cost algorithm.
+    This function will tile the input DEM into chunks and breach the paths in
+    each chunk in parallel using the least cost algorithm.
+    """
     input_ds = gdal.Open(input_path)
     projection = input_ds.GetProjection()
     geotransform = input_ds.GetGeoTransform()
@@ -327,28 +377,18 @@ def breach_paths_least_cost(
 
     # allocate memory for the costs and previous cells
     search_window_size = 2 * search_radius + 1
-    chunk_costs_array = np.full(
-        (max_pits, search_window_size, search_window_size),
-        np.inf,
-        dtype=np.float32,
-    )
-    chunk_prev_rows_array = np.full(
-        (max_pits, search_window_size, search_window_size),
-        UNVISITED_INDEX,
-        dtype=np.int64,
-    )
-    chunk_prev_cols_array = np.full(
-        (max_pits, search_window_size, search_window_size),
-        UNVISITED_INDEX,
-        dtype=np.int64,
+    chunk_costs_array, chunk_prev_rows_array, chunk_prev_cols_array = (
+        allocate_memory_for_costs_and_prev_cells(search_window_size, max_pits)
     )
 
     for chunk in raster_chunker(
         input_band, chunk_size=chunk_size, chunk_buffer_size=search_radius
     ):
+        if chunk.col == 3 and chunk.row == 1:
+            pass
         pits_raster = breach_single_cell_pits_in_chunk(chunk.data, input_nodata)
         pits_array = np.argwhere(pits_raster == 1)
-        breach_all_pits_in_chunk_least_cost(
+        breached_dem = breach_all_pits_in_chunk_least_cost(
             pits_array,
             chunk.data,
             input_nodata,
@@ -358,6 +398,7 @@ def breach_paths_least_cost(
             search_radius,
             max_pits,
         )
+        chunk.from_numpy(breached_dem)
         chunk.write(output_band)
     input_ds = None
     output_ds = None

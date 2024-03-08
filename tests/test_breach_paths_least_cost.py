@@ -1,14 +1,16 @@
 import numpy as np
 import pytest
 from osgeo import gdal
+import click.testing
 from overflow.breach_paths_least_cost import (
     breach_all_pits_in_chunk_least_cost,
     breach_paths_least_cost,
+    allocate_memory_for_costs_and_prev_cells,
     EPSILON_GRADIENT,
+    DEFAULT_SEARCH_RADIUS,
+    DEFAULT_MAX_PITS,
 )
-
-# pylint does not understand pytest fixtures
-# pylint: disable=redefined-outer-name
+from overflow_cli import breach_paths_least_cost_cli
 
 
 @pytest.fixture(name="dem_with_pit")
@@ -65,7 +67,22 @@ def fixture_dem_from_file(dem_with_pit):
 def test_breach_paths_least_cost_chunk(dem_with_pit):
     """Test that the expected breach path is created."""
     pits = np.array([[3, 3]])
-    breach_all_pits_in_chunk_least_cost(pits, dem_with_pit, -9999)
+    max_pits = DEFAULT_MAX_PITS
+    search_radius = DEFAULT_SEARCH_RADIUS
+    search_window_size = 2 * search_radius + 1
+    chunk_costs_array, chunk_prev_rows_array, chunk_prev_cols_array = (
+        allocate_memory_for_costs_and_prev_cells(search_window_size, max_pits)
+    )
+    breached_dem = breach_all_pits_in_chunk_least_cost(
+        pits,
+        dem_with_pit,
+        -9999,
+        chunk_costs_array,
+        chunk_prev_rows_array,
+        chunk_prev_cols_array,
+        search_radius,
+        max_pits,
+    )
     expected_dem = np.array(
         [
             [2, 2, 2, -2, 2, 2, 2],
@@ -78,13 +95,28 @@ def test_breach_paths_least_cost_chunk(dem_with_pit):
         ],
         dtype=np.float32,
     )
-    assert np.allclose(dem_with_pit, expected_dem)
+    assert np.allclose(breached_dem, expected_dem)
 
 
 def test_breach_paths_least_cost_chunk_with_nodata(dem_with_pit_and_nodata):
     """Test that the expected breach path is created."""
     pits = np.array([[3, 3]])
-    breach_all_pits_in_chunk_least_cost(pits, dem_with_pit_and_nodata, -9999)
+    max_pits = DEFAULT_MAX_PITS
+    search_radius = DEFAULT_SEARCH_RADIUS
+    search_window_size = 2 * search_radius + 1
+    chunk_costs_array, chunk_prev_rows_array, chunk_prev_cols_array = (
+        allocate_memory_for_costs_and_prev_cells(search_window_size, max_pits)
+    )
+    breached_dem = breach_all_pits_in_chunk_least_cost(
+        pits,
+        dem_with_pit_and_nodata,
+        -9999,
+        chunk_costs_array,
+        chunk_prev_rows_array,
+        chunk_prev_cols_array,
+        search_radius,
+        max_pits,
+    )
     expected_dem = np.array(
         [
             [2, 2, 2, -9999, 2, 2, 2],
@@ -97,12 +129,19 @@ def test_breach_paths_least_cost_chunk_with_nodata(dem_with_pit_and_nodata):
         ],
         dtype=np.float32,
     )
-    assert np.allclose(dem_with_pit_and_nodata, expected_dem)
+    assert np.allclose(breached_dem, expected_dem)
 
 
 def test_dem_from_file(dem_from_file):
+    """Same as test_breach_paths_least_cost_chunk but using a file."""
     output_path = "/vsimem/dem_from_file_breached.tif"
-    breach_paths_least_cost(dem_from_file, output_path, chunk_size=7, search_radius=3)
+    breach_paths_least_cost(
+        dem_from_file,
+        output_path,
+        chunk_size=7,
+        search_radius=3,
+        max_pits=DEFAULT_MAX_PITS,
+    )
     dataset = gdal.Open(output_path)
     band = dataset.GetRasterBand(1)
     array = band.ReadAsArray()
@@ -119,9 +158,43 @@ def test_dem_from_file(dem_from_file):
         dtype=np.float32,
     )
     assert np.allclose(array, expected_dem)
+    gdal.Unlink(output_path)
 
 
-def test_dem_real():
-    input_path = "data/dem1_5070.tif"
-    output_path = "data/dem1_5070_breached.tif"
-    breach_paths_least_cost(input_path, output_path, chunk_size=1000)
+def test_breach_paths_least_cost_cli(dem_from_file):
+    """Test the CLI."""
+    output_path = "/vsimem/test_breach_paths_least_cost_cli.tif"
+    runner = click.testing.CliRunner()
+    result = runner.invoke(
+        breach_paths_least_cost_cli,
+        [
+            "--input_file",
+            dem_from_file,
+            "--output_file",
+            output_path,
+            "--chunk_size",
+            "7",
+            "--search_radius",
+            "3",
+            "--max_pits",
+            f"{DEFAULT_MAX_PITS}",
+        ],
+    )
+    assert result.exit_code == 0
+    dataset = gdal.Open(output_path)
+    band = dataset.GetRasterBand(1)
+    array = band.ReadAsArray()
+    expected_dem = np.array(
+        [
+            [2, 2, 2, -2, 2, 2, 2],
+            [2, 2, 2, -4 / 3, 2, 2, 2],
+            [2, 2, 2, -2 / 3, 2, 2, 2],
+            [2, 2, 2, 0, 2, 2, 2],
+            [2, 2, 2, 2, 2, 2, 2],
+            [2, 2, 2, 2, 2, 2, 2],
+            [2, 2, 2, 2, 2, 2, 2],
+        ],
+        dtype=np.float32,
+    )
+    assert np.allclose(array, expected_dem)
+    gdal.Unlink(output_path)

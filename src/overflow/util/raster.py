@@ -7,6 +7,9 @@ from numba.experimental import jitclass
 
 gdal.UseExceptions()
 
+# constants
+DEFAULT_CHUNK_SIZE = 2000
+
 
 def gdal_data_type_to_numpy_data_type(gdal_dtype: int) -> np.dtype:
     """Map a GDAL data type to a numpy data type.
