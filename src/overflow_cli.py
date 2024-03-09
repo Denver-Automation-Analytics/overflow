@@ -1,12 +1,12 @@
 import click
 
 from overflow.breach_single_cell_pits import breach_single_cell_pits
-from overflow.breach_paths_least_cost import (
-    breach_paths_least_cost,
+from overflow.breach_paths_least_cost import breach_paths_least_cost
+from overflow.constants import (
+    DEFAULT_CHUNK_SIZE,
     DEFAULT_SEARCH_RADIUS,
     DEFAULT_MAX_PITS,
 )
-from overflow.util.raster import DEFAULT_CHUNK_SIZE
 
 
 @click.group()

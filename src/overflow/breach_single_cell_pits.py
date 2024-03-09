@@ -2,7 +2,8 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from .util.raster import raster_chunker, DEFAULT_CHUNK_SIZE
+from overflow.util.raster import raster_chunker
+from overflow.constants import DEFAULT_CHUNK_SIZE
 
 
 @njit(parallel=True)

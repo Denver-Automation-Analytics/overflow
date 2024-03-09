@@ -3,14 +3,15 @@ import heapq
 from numba import njit, prange
 from osgeo import gdal
 import numpy as np
-from .util.raster import GridCell, raster_chunker, DEFAULT_CHUNK_SIZE
+from .util.raster import GridCell, raster_chunker
 from .breach_single_cell_pits import breach_single_cell_pits_in_chunk
-
-# constants
-DEFAULT_SEARCH_RADIUS = 200
-DEFAULT_MAX_PITS = 24
-UNVISITED_INDEX = -1
-EPSILON_GRADIENT = 1e-5  # small value to apply to gradient of breaching to nodata cells
+from .constants import (
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_SEARCH_RADIUS,
+    DEFAULT_MAX_PITS,
+    UNVISITED_INDEX,
+    EPSILON_GRADIENT,
+)
 
 
 @njit
@@ -248,8 +249,6 @@ def breach_pits_in_chunk_least_cost(
                     and 0 <= next_row + row_offset[i] < search_window_size
                     and 0 <= next_col + col_offset[i] < search_window_size
                 )
-                if not is_in_bounds:
-                    continue
                 if is_in_bounds:
                     process_neighbor(
                         i,
@@ -384,8 +383,6 @@ def breach_paths_least_cost(
     for chunk in raster_chunker(
         input_band, chunk_size=chunk_size, chunk_buffer_size=search_radius
     ):
-        if chunk.col == 3 and chunk.row == 1:
-            pass
         pits_raster = breach_single_cell_pits_in_chunk(chunk.data, input_nodata)
         pits_array = np.argwhere(pits_raster == 1)
         breached_dem = breach_all_pits_in_chunk_least_cost(
