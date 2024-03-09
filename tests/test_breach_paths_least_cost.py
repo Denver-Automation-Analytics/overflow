@@ -30,6 +30,13 @@ def fixture_dem_with_pit():
     )
 
 
+@pytest.fixture(name="random_dem")
+def fixture_random_dem():
+    """A numpy array representing a 1000x1000 DEM with random float values between 1 and 10."""
+    np.random.seed(0)  # Ensures reproducibility
+    return np.random.uniform(1, 10, size=(1000, 1000)).astype(np.float32)
+
+
 @pytest.fixture(name="dem_with_pit_and_nodata")
 def fixture_dem_with_pit_and_nodata():
     """A numpy array representing a DEM with a pit at the center and a breach path to the edge."""
@@ -57,6 +64,27 @@ def fixture_dem_from_file(dem_with_pit):
     )
     band = dataset.GetRasterBand(1)
     band.WriteArray(dem_with_pit)
+    band.SetNoDataValue(-9999)
+    dataset.FlushCache()
+    dataset = None
+    yield output_path
+    gdal.Unlink(output_path)
+
+
+@pytest.fixture(name="random_dem_from_file")
+def fixture_random_dem_from_file(random_dem):
+    """Create a raster filepath for testing."""
+    output_path = "/vsimem/test_raster_breach_random.tif"
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(
+        output_path,
+        random_dem.shape[0],
+        random_dem.shape[1],
+        1,
+        gdal.GDT_Float32,
+    )
+    band = dataset.GetRasterBand(1)
+    band.WriteArray(random_dem)
     band.SetNoDataValue(-9999)
     dataset.FlushCache()
     dataset = None
@@ -158,6 +186,22 @@ def test_dem_from_file(dem_from_file):
         dtype=np.float32,
     )
     assert np.allclose(array, expected_dem)
+    gdal.Unlink(output_path)
+
+
+def test_breach_paths_least_cost_random(random_dem_from_file, random_dem):
+    """Test that the expected breach path is created."""
+    output_path = "/vsimem/test_raster_breach_path_random.tif"
+    breach_paths_least_cost(
+        random_dem_from_file,
+        output_path,
+        chunk_size=1000,
+        search_radius=100,
+    )
+    dataset = gdal.Open(output_path)
+    band = dataset.GetRasterBand(1)
+    array = band.ReadAsArray()
+    assert not np.allclose(random_dem, array)
     gdal.Unlink(output_path)
 
 
