@@ -28,31 +28,31 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
     np.ndarray
         A chunk of a DEM with flow direction values.
     """
+    # order is optimized for cache access
     d8_directions_array = [
-        128,  # North East
-        1,  # East
-        2,  # South East
-        4,  # South
-        8,  # South West
-        16,  # West
         32,  # North West
         64,  # North
+        128,  # North East
+        16,  # West
+        1,  # East
+        8,  # South West
+        4,  # South
+        2,  # South East
     ]
 
+    # locations defined as (row,col), position in array matches d8_directions_array
     directions = [
-        [
-            -1,
-            1,
-        ],  # North East ---- locations defined as (row,col), position in array matches d8_directions_array
-        [0, 1],  # East
-        [1, 1],  # South East
-        [1, 0],  # South
-        [1, -1],  # South west
-        [0, -1],  # West
-        [-1, -1],  # North West
-        [-1, 0],  # North
+        (-1, 1),  # North East
+        (0, 1),  # East
+        (1, 1),  # South East
+        (1, 0),  # South
+        (1, -1),  # South west
+        (0, -1),  # West
+        (-1, -1),  # North West
+        (-1, 0),  # North
     ]
-    fdr = np.full(dem.shape, 255, dtype=np.uint8)
+    # np.empty is faster than np.full
+    fdr = np.empty(dem.shape, dtype=np.uint8)
     # Get the shape of the chunk
     rows, cols = dem.shape
     # Loop through each cell in the chunk
@@ -61,18 +61,22 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
     for row in prange(1, rows - 1):
         for col in range(1, cols - 1):
             if dem[row, col] != nodata_value:
-                slopes = np.array(
-                    [
-                        calculate_slope(dem, row, col, dy, dx, nodata_value)
-                        for dy, dx in directions
-                    ]
-                )
-                # Check if the neighbor is a nodata value, used to keep array index constant
-                if np.all(slopes <= 0):
-                    continue
+                max_slope = -np.inf
+                max_index = -1
+                all_non_positive = True
+
+                for i, (dy, dx) in enumerate(directions):
+                    slope = calculate_slope(dem, row, col, dy, dx, nodata_value)
+                    if slope > max_slope:
+                        max_slope = slope
+                        max_index = i
+                    if slope > 0:
+                        all_non_positive = False
+
+                if all_non_positive:
+                    fdr[row, col] = 255
                 else:
-                    index_max = np.argmax(slopes)
-                    fdr[row, col] = d8_directions_array[index_max]
+                    fdr[row, col] = d8_directions_array[max_index]
 
     return fdr
 
@@ -134,14 +138,14 @@ def flow_direction(input_path, output_path, chunk_size=1000):
         chunk.write(output_band)
 
 
-breach_single_cell_pits(
-    "/workspaces/overflow/data/MergedLarger.tif",
-    "/workspaces/overflow/data/BreachedLargerNew.tif",
-    chunk_size=2000,
-)
+# breach_single_cell_pits(
+#     "/workspaces/overflow/data/MergedLarger.tif",
+#     "/workspaces/overflow/data/BreachedLargerNew.tif",
+#     chunk_size=2000,
+# )
 
 flow_direction(
-    "/workspaces/overflow/data/BreachedLargerNew.tif",
-    "/workspaces/overflow/data/FDR_LargerNew5.tif",
+    "data/DEM10.tif",
+    "data/FDR10.tif",
     chunk_size=2000,
 )
