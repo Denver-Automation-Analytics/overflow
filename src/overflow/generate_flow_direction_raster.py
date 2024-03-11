@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 from util.raster import raster_chunker
+from breach_single_cell_pits import breach_single_cell_pits
 
 
 @njit(parallel=True)
@@ -104,7 +105,9 @@ def calculate_slope(
 
 
 def flow_direction(input_path, output_path, chunk_size=1000):
-    """Generates a flow direction raster from a DEM chunks of a given size."""
+    """
+    Generates a flow direction raster from a DEM chunks of a given size.
+    """
     input_raster = gdal.Open(input_path)
     projection = input_raster.GetProjection()
     transform = input_raster.GetGeoTransform()
@@ -117,22 +120,28 @@ def flow_direction(input_path, output_path, chunk_size=1000):
         input_raster.RasterYSize,
         input_raster.RasterXSize,
         1,
-        gdal.GDT_Float32,
+        gdal.GDT_Byte,
     )
 
     dataset.SetProjection(projection)
     dataset.SetGeoTransform(transform)
     output_band = dataset.GetRasterBand(1)
 
-    for chunk in raster_chunker(band, chunk_size=chunk_size, chunk_buffer_size=2):
+    for chunk in raster_chunker(band, chunk_size=chunk_size, chunk_buffer_size=1):
 
         result = generate_flow_direction_raster(chunk.data, nodata_value)
         chunk.from_numpy(result)
         chunk.write(output_band)
 
 
+breach_single_cell_pits(
+    "/workspaces/overflow/data/MergedLarger.tif",
+    "/workspaces/overflow/data/BreachedLargerNew.tif",
+    chunk_size=2000,
+)
+
 flow_direction(
-    "/workspaces/overflow/data/Filled3Clip.tif",
-    "/workspaces/overflow/data/refactoredFDR.tif",
-    chunk_size=1000,
+    "/workspaces/overflow/data/BreachedLargerNew.tif",
+    "/workspaces/overflow/data/FDR_LargerNew5.tif",
+    chunk_size=2000,
 )
