@@ -42,14 +42,14 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
 
     # locations defined as (row,col), position in array matches d8_directions_array
     directions = [
-        (-1, 1),  # North East
-        (0, 1),  # East
-        (1, 1),  # South East
-        (1, 0),  # South
-        (1, -1),  # South west
-        (0, -1),  # West
         (-1, -1),  # North West
         (-1, 0),  # North
+        (-1, 1),  # North East
+        (0, -1),  # West
+        (0, 1),  # East
+        (1, -1),  # South west
+        (1, 0),  # South
+        (1, 1),  # South East
     ]
     # np.empty is faster than np.full
     fdr = np.empty(dem.shape, dtype=np.uint8)
