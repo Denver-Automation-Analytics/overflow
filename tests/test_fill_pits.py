@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
-from numba.typed import Dict
-from numba import types
+from numba import types, typed
 from overflow.fill_pits import priority_flood_tile, make_sides, handle_edge, handle_corner
 
 
@@ -150,7 +149,7 @@ def test_handle_edge():
     labels_a = np.array([2, 2, 3, 3, 2])
     dem_b = np.array([5, 4, 3, 2, 1])
     labels_b = np.array([5, 5, 6, 6, 5])
-    graph =  Dict.empty(
+    graph =  typed.Dict.empty(
         key_type=types.Tuple([types.int64, types.int64]),
         value_type=types.float32,
     )
@@ -170,7 +169,7 @@ def test_handle_corner():
     label_a = 2
     elev_b = 1
     label_b = 5
-    graph = Dict.empty(
+    graph = typed.Dict.empty(
         key_type=types.Tuple([types.int64, types.int64]),
         value_type=types.float32,
     )
