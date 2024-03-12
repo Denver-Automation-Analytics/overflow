@@ -21,63 +21,30 @@ def fixture_raster_file_path():
     band = dataset.GetRasterBand(1)
     array = np.array(
         [
-            [100, 101, 90, 97, 90],
-            [103, 102, 80, 96, 95],
-            [94, 95, 96, 95, 94],
-            [97, 98, 95, 94, 90],
-            [95, 90, 85, 40, 92],
+            [10, 9, 8, 7, 6],
+            [10, 9, 8, 7, 6],
+            [10, 9, 8, 7, 6],
+            [10, 9, 4, 7, 6],
+            [10, 9, 8, 7, 3],
         ]
     )
     band.WriteArray(array)
-    band.SetNoDataValue(-9999)
+    band.SetNoDataValue(-np.inf)
     dataset.FlushCache()
     dataset = None
     yield output_path
     gdal.Unlink(output_path)
 
 
-def test_breach_cingle_cell_pits_in_chunk():
-
-    chunk = np.array(
-        [
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, 100, 101, 90, 97, 90, -999, -999],
-            [-999, -999, 103, 102, 80, 96, 95, -999, -999],
-            [-999, -999, 94, 95, 96, 95, 94, -999, -999],
-            [-999, -999, 97, 98, 95, 94, 90, -999, -999],
-            [-999, -999, 95, 90, 85, 40, 92, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-        ]
-    )
-    expected = np.array(
-        [
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, 100, 90, 90, 97, 90, -999, -999],
-            [-999, -999, 97, 87, 80, 85, 95, -999, -999],
-            [-999, -999, 94, 95, 96, 95, 94, -999, -999],
-            [-999, -999, 97, 92, 95, 94, 90, -999, -999],
-            [-999, -999, 95, 90, 85, 40, 92, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-        ]
-    )
-    nodata_value = -999
-    _ = breach_single_cell_pits_in_chunk(chunk, nodata_value)
-    assert (chunk & expected).all()
-
-
 def test_breach_single_cell_pits(raster_file_path):
 
     expected = np.array(
         [
-            [100, 90, 90, 97, 90],
-            [97, 87, 80, 85, 95],
-            [94, 95, 96, 95, 94],
-            [97, 92, 95, 94, 90],
-            [95, 90, 85, 40, 92],
+            [10, 9, 8, 7, 6],
+            [10, 9, 8, 7, 6],
+            [10, 9, 8, 7, 6],
+            [10, 9, 4, 3, 6],
+            [10, 9, 8, 7, 3],
         ]
     )
     results_path = "/vsimem/test_breach_single_cell_pits.tif"
@@ -85,4 +52,4 @@ def test_breach_single_cell_pits(raster_file_path):
     result = gdal.Open(results_path)
     band = result.GetRasterBand(1)
     band = result.ReadAsArray(0, 0, result.RasterXSize, result.RasterYSize).astype(int)
-    assert (band & expected).all()
+    assert np.array_equal(band, expected)

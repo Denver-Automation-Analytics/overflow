@@ -7,7 +7,7 @@ from overflow.generate_flow_direction_raster import flow_direction
 
 @pytest.fixture
 def raster_file_path():
-    """Create a random raster band for testing.
+    """Create a raster band for testing.
 
     Yields:
         gdal.Band: A raster band of size 5x5.
@@ -29,7 +29,7 @@ def raster_file_path():
         ]
     )
     band.WriteArray(array)
-    band.SetNoDataValue(-np.inf)
+    band.SetNoDataValue(0)
     dataset.FlushCache()
     dataset = None
     yield output_path

@@ -6,7 +6,7 @@ from .util.raster import raster_chunker
 
 
 @njit(parallel=True)
-def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
+def generate_flow_direction_raster(dem: np.ndarray, nodata_value: float) -> np.ndarray:
     """
     Define the 8 directions using a list of tuples
      32   |   64   |  128
@@ -20,7 +20,8 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
 
     Parameters
     ----------
-    chunk (np.ndarray) : Digital Elevation Model (DEM) chunk.
+    dem (np.ndarray) : Digital Elevation Model (DEM) chunk.
+    nodata_value (float) : Value from dem representing no data
 
     Returns
     -------
@@ -51,7 +52,9 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
         (1, 1),  # South East
     ]
     # np.empty is faster than np.full
-    fdr = np.zeros(dem.shape, dtype=np.uint8)
+
+    fdr = np.empty(dem.shape, dtype=np.uint8)
+
     # Get the shape of the chunk
     rows, cols = dem.shape
 
@@ -91,7 +94,7 @@ def calculate_slope(
     Parameters
     ----------
     dem (np.ndarray) : Digital Elevation Model (DEM).
-    i, j (int) : Coordinates of the cell.
+    row, col (int) : Coordinates of the cell.
     dx, dy (int) : Direction to the neighbor.
     nodata_value (float) : Value representing no data.
 
@@ -108,7 +111,7 @@ def calculate_slope(
     )
 
 
-def flow_direction(input_path, output_path, chunk_size=1000):
+def flow_direction(input_path, output_path, chunk_size=4000):
     """
     Generates a flow direction raster from a DEM chunks of a given size.
     """
@@ -126,13 +129,12 @@ def flow_direction(input_path, output_path, chunk_size=1000):
         1,
         gdal.GDT_Byte,
     )
-
     dataset.SetProjection(projection)
     dataset.SetGeoTransform(transform)
     output_band = dataset.GetRasterBand(1)
-
+    output_band.SetNoDataValue(nodata_value)
     for chunk in raster_chunker(band, chunk_size=chunk_size, chunk_buffer_size=1):
-
         result = generate_flow_direction_raster(chunk.data, nodata_value)
+        result[chunk.data == nodata_value] = nodata_value
         chunk.from_numpy(result)
         chunk.write(output_band)
