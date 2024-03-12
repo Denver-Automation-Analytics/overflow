@@ -2,8 +2,7 @@ import math
 import numpy as np
 from numba import njit, prange
 from osgeo import gdal
-from util.raster import raster_chunker
-from breach_single_cell_pits import breach_single_cell_pits
+from .util.raster import raster_chunker
 
 
 @njit(parallel=True)
@@ -52,9 +51,10 @@ def generate_flow_direction_raster(dem, nodata_value) -> np.ndarray:
         (1, 1),  # South East
     ]
     # np.empty is faster than np.full
-    fdr = np.empty(dem.shape, dtype=np.uint8)
+    fdr = np.zeros(dem.shape, dtype=np.uint8)
     # Get the shape of the chunk
     rows, cols = dem.shape
+
     # Loop through each cell in the chunk
 
     # pylint: disable=not-an-iterable
@@ -136,16 +136,3 @@ def flow_direction(input_path, output_path, chunk_size=1000):
         result = generate_flow_direction_raster(chunk.data, nodata_value)
         chunk.from_numpy(result)
         chunk.write(output_band)
-
-
-# breach_single_cell_pits(
-#     "/workspaces/overflow/data/MergedLarger.tif",
-#     "/workspaces/overflow/data/BreachedLargerNew.tif",
-#     chunk_size=2000,
-# )
-
-flow_direction(
-    "data/DEM10.tif",
-    "data/FDR10.tif",
-    chunk_size=2000,
-)

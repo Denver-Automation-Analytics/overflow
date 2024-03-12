@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from util.raster import raster_chunker
+from .util.raster import raster_chunker
 
 
 @njit(parallel=True)
