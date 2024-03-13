@@ -29,7 +29,6 @@ def flow_accumulation(
             ):  # if cell is nodata, it will not be considered in flow accumulation
                 ridge_indicies[row, col] = 1
             else:
-
                 if fdr[row, col] in [
                     1,
                     2,
@@ -49,15 +48,29 @@ def flow_accumulation(
                     )
                 else:
                     ridge_indicies[row, col] = 1
+
+    ridge_cells = np.argwhere(
+        ridge_indicies == 0
+    )  # location of all cells that do not receive flow
+
+    ridge_cells_dict = assign_index_dict(ridge_cells, fdr)
     flow_accumulation_raster = increment_flow_accumulation(
-        ridge_indicies, flow_accumulation_raster, fdr, nodata_value
+        ridge_cells_dict, flow_accumulation_raster, fdr, nodata_value
     )
     return flow_accumulation_raster
 
 
 @njit()
+def assign_index_dict(ridge_cells, fdr):
+    ridge_cells_dict = {}
+    for i in ridge_cells:
+        ridge_cells_dict[(i[0], i[1])] = fdr[i[0], i[1]]
+    return ridge_cells_dict
+
+
+@njit()
 def increment_flow_accumulation(
-    ridge_indicies, flow_accumulation_raster, fdr, nodata_value
+    ridge_cells_dict, flow_accumulation_raster, fdr, nodata_value
 ):
     direction_dict = {
         1: (0, 1),
@@ -71,25 +84,21 @@ def increment_flow_accumulation(
         250: (0, 0),
     }
 
-    ridge_cells = np.argwhere(
-        ridge_indicies == 0
-    )  # location of all cells that do not receive flow
-
     FAC_Row, FAC_Col = (
         flow_accumulation_raster.shape
     )  # get the shape of the flow accumulation raster, used to check for out of bounds
-    for i, j in ridge_cells:
-        acc_row, acc_col = i, j
+    for key in ridge_cells_dict:
+        acc_row, acc_col = key[0], key[1]
         acc_increment = 1
         accum_dict = {}
         while (
             fdr[acc_row, acc_col] != nodata_value
         ):  # while the cell is not a nodata cell follow flow direction
-            if int(fdr[acc_row, acc_col]) not in direction_dict:
+            if fdr[acc_row, acc_col] not in direction_dict:
                 break
             else:
                 acc_path = direction_dict[
-                    int(fdr[acc_row, acc_col])
+                    fdr[acc_row, acc_col]
                 ]  # get the direction of flow from the flow direction raster
                 if (
                     acc_row + acc_path[0] < 0  # check for out of bounds
@@ -108,7 +117,8 @@ def increment_flow_accumulation(
                     elif (
                         fdr[acc_row, acc_col] == 255
                     ):  # if cell is a sink or flat, keep going in same direction as previously established
-                        accum_dict[(acc_row, acc_col)] = acc_increment
+
+                        accum_dict[(acc_row + 1, acc_col - 1)] = acc_increment
                         acc_increment += 1
                     else:
                         accum_dict[(acc_row, acc_col)] = (
@@ -128,7 +138,7 @@ def increment_flow_accumulation(
     return flow_accumulation_raster
 
 
-def flow_accumulation_from_chunks(input_path, output_path, chunk_size=6000):
+def flow_accumulation_from_chunks(input_path, output_path, chunk_size=2000):
     input_raster = gdal.Open(input_path)
     projection = input_raster.GetProjection()
     transform = input_raster.GetGeoTransform()
@@ -161,5 +171,5 @@ def flow_accumulation_from_chunks(input_path, output_path, chunk_size=6000):
 
 flow_accumulation_from_chunks(
     "/workspaces/overflow/data/FDR_NoData4.tif",
-    "/workspaces/overflow/data/FAC21.tif",
+    "/workspaces/overflow/data/FAC28.tif",
 )
