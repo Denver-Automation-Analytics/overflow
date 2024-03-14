@@ -65,7 +65,7 @@ def assign_index_dict(ridge_cells, fdr):
     ridge_cells_dict = {}
     for i in ridge_cells:
         ridge_cells_dict[(i[0], i[1])] = fdr[i[0], i[1]]
-    return ridge_cells_dict
+    return {(row, col): fdr[row, col] for row, col in ridge_cells}
 
 
 @njit()
@@ -81,64 +81,83 @@ def increment_flow_accumulation(
         32: (-1, -1),
         64: (-1, 0),
         128: (-1, 1),
-        250: (0, 0),
+        255: (-1, 0),
+        179: (0, 0),
     }
 
     FAC_Row, FAC_Col = (
         flow_accumulation_raster.shape
     )  # get the shape of the flow accumulation raster, used to check for out of bounds
-    for key in ridge_cells_dict:
-        acc_row, acc_col = key[0], key[1]
+
+    for acc_row, acc_col in ridge_cells_dict:
+        cyclical_array_check = []
+
         acc_increment = 1
         accum_dict = {}
+        cyclical = False
         while (
             fdr[acc_row, acc_col] != nodata_value
         ):  # while the cell is not a nodata cell follow flow direction
             if fdr[acc_row, acc_col] not in direction_dict:
                 break
+
+            if cyclical:
+                pass
             else:
                 acc_path = direction_dict[
                     fdr[acc_row, acc_col]
                 ]  # get the direction of flow from the flow direction raster
+            if (
+                acc_row + acc_path[0] < 0  # check for out of bounds
+                or acc_col + acc_path[1] < 0
+                or acc_row + acc_path[0] >= FAC_Row
+                or acc_col + acc_path[1] >= FAC_Col
+            ):
+                break
+
+            if (
+                acc_row,
+                acc_col,
+            ) in accum_dict:  # if cell already present in dictionary proceed, if cells become part of cyclical progression apply if statement below
+                accum_dict[(acc_row, acc_col)] = accum_dict[(acc_row, acc_col)] + 1
+                cyclical_array_check.append((acc_row, acc_col))
                 if (
-                    acc_row + acc_path[0] < 0  # check for out of bounds
-                    or acc_col + acc_path[1] < 0
-                    or acc_row + acc_path[0] >= FAC_Row
-                    or acc_col + acc_path[1] >= FAC_Col
-                ):
-                    break
+                    cyclical_array_check.count((acc_row, acc_col)) > 6
+                ):  # check if cell is part of a cyclical progression, if so move row col position by -2 to escape
+                    accum_dict[(acc_row - 1, acc_col - 1)] = acc_increment + 1
+
+                    acc_row = acc_row - 2
+                    acc_col = acc_col - 2
+                    acc_increment += 1
+                    if fdr[acc_row, acc_col] != nodata_value:
+                        acc_path = direction_dict[fdr[acc_row, acc_col]]
+                        cyclical = True
+                        break
 
                 else:
-                    if (
-                        acc_row,
-                        acc_col,
-                    ) in accum_dict:  # if cell already present in dictionary, break loop
-                        break
-                    elif (
-                        fdr[acc_row, acc_col] == 255
-                    ):  # if cell is a sink or flat, keep going in same direction as previously established
+                    acc_row = acc_row + acc_path[0]
+                    acc_col = acc_col + acc_path[1]
+                    acc_increment += 1
 
-                        accum_dict[(acc_row + 1, acc_col - 1)] = acc_increment
-                        acc_increment += 1
-                    else:
-                        accum_dict[(acc_row, acc_col)] = (
-                            acc_increment  # if cell not sink or flat, increment flow accumulation and add cell index to dictionary
-                        )
+            else:
+                accum_dict[(acc_row, acc_col)] = (
+                    acc_increment  # if cell not sink or flat, increment flow accumulation and add cell index to dictionary
+                )
 
-                        acc_row = acc_row + acc_path[0]
-                        acc_col = acc_col + acc_path[1]
-                        acc_increment += 1
+                acc_row = acc_row + acc_path[0]
+                acc_col = acc_col + acc_path[1]
+                acc_increment += 1
 
         if (
             len(accum_dict) > 200
         ):  # establish lower bound for stream accumulation length
-            for key in accum_dict:
-                flow_accumulation_raster[key[0], key[1]] = int(accum_dict[key])
+            for (row, col), value in accum_dict.items():
+                flow_accumulation_raster[row, col] = int(value)
 
     return flow_accumulation_raster
 
 
-def flow_accumulation_from_chunks(input_path, output_path, chunk_size=2000):
+def flow_accumulation_from_chunks(input_path, output_path, chunk_size=6000):
     input_raster = gdal.Open(input_path)
     projection = input_raster.GetProjection()
     transform = input_raster.GetGeoTransform()
@@ -170,6 +189,6 @@ def flow_accumulation_from_chunks(input_path, output_path, chunk_size=2000):
 
 
 flow_accumulation_from_chunks(
-    "/workspaces/overflow/data/FDR_NoData4.tif",
-    "/workspaces/overflow/data/FAC28.tif",
+    "/workspaces/overflow/data/fdr_large.tif",
+    "/workspaces/overflow/data/FAC37.tif",
 )
