@@ -46,7 +46,8 @@ def breach_single_cell_pits_cli(input_file: str, output_file: str, chunk_size: i
         print(
             f"breach_single_cell_pits failed with the following exception: {str(exc)}"
         )
-        raise click.Abort()  # exit with non-zero exit code.
+        # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
+        raise click.Abort()
 
 
 @main.command(name="breach-paths-least-cost")
@@ -97,4 +98,5 @@ def breach_paths_least_cost_cli(
         print(
             f"breach_paths_least_cost failed with the following exception: {str(exc)}"
         )
-        raise click.Abort()  # exit with non-zero exit code.
+        # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
+        raise click.Abort()
