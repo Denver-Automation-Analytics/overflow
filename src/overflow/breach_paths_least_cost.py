@@ -11,6 +11,7 @@ from .constants import (
     DEFAULT_MAX_PITS,
     UNVISITED_INDEX,
     EPSILON_GRADIENT,
+    NEIGHBORS,
 )
 
 
@@ -203,16 +204,6 @@ def breach_pits_in_chunk_least_cost(
     if search_radius <= 0 or not isinstance(search_radius, int):
         raise ValueError("search_radius must be a positive integer")
     search_window_size = 2 * search_radius + 1
-    neighbors = [
-        (0, 1),  # Right
-        (1, 0),  # Down
-        (0, -1),  # Left
-        (-1, 0),  # Up
-        (-1, -1),  # Upper Left
-        (-1, 1),  # Upper Right
-        (1, -1),  # Lower Left
-        (1, 1),  # Lower Right
-    ]
     # list of locals for each thread
     breach_point_found = np.zeros(pits.shape[0], dtype=np.bool_)
     current_row = np.full(pits.shape[0], -1, dtype=np.int64)
@@ -255,7 +246,7 @@ def breach_pits_in_chunk_least_cost(
             if len(heap) >= search_window_size**2:
                 break  # pit is unsolvable with max heap size
             # for each neighbor of the current cell
-            for dr, dc in neighbors:
+            for dr, dc in NEIGHBORS:
                 next_row, next_col = current_row[i] + dr, current_col[i] + dc
                 # Calculate the cost considering diagonal movement
                 multiplier = 1 if dr == 0 or dc == 0 else math.sqrt(2)
