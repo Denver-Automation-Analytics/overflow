@@ -518,8 +518,8 @@ def reconstruct_path(
         initial_elevation (np.ndarray): Initial elevations of the pit cells.
         dem (np.ndarray): Digital Elevation Model (DEM) array.
         no_data_value (float): Value indicating no data in the DEM grid.
-        previous_cell_rows (np.ndarray): 2D array storing the previous row indices of the path.
-        previous_cell_cols (np.ndarray): 2D array storing the previous column indices of the path.
+        previous_cell_rows (np.ndarray): 3D array storing the previous row indices of the path.
+        previous_cell_cols (np.ndarray): 3D array storing the previous column indices of the path.
         row_offset (np.ndarray): Offset of the row index of the pit in the search window.
         col_offset (np.ndarray): Offset of the column index of the pit in the search window.
         breach_points_found (np.ndarray): Flag indicating if a breach point was found for each pit.

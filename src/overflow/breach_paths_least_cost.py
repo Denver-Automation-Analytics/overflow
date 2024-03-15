@@ -16,73 +16,88 @@ from .constants import (
 
 @njit
 def process_neighbor(
-    i: int,
-    next_row: int,
-    next_col: int,
+    pit_index: int,
+    neighbor_row: int,
+    neighbor_col: int,
     row_offset: int,
     col_offset: int,
-    current_cost: float,
-    init_elevation: float,
+    current_cell_cost: float,
+    initial_elevation: float,
     dem: np.ndarray,
     dem_no_data_value: float,
     costs_array: np.ndarray,
     prev_rows_array: np.ndarray,
     prev_cols_array: np.ndarray,
     heap: list[GridCell],
-    multiplier: float,
+    cost_multiplier: float,
     current_row: int,
     current_col: int,
-):
+) -> None:
     """
-    Process the neighbor cell for least-cost path computation.
+    Process a neighboring cell in a Digital Elevation Model (DEM) grid for pathfinding.
 
-    This function calculates the cost of moving to a neighboring cell and updates the costs array and previous cell
-    arrays if the calculated cost is lower than the existing cost for that cell. It also enqueues the neighbor cell into
-    the priority queue if necessary.
+    This function calculates the cost of moving to a neighboring cell and updates the
+    cost and previous cell information if the calculated cost is lower than the current
+    cost of the neighbor. It also enqueues the neighbor into a priority queue if the
+    cost is updated.
 
     Parameters:
-        i (int): Index of the pit being processed.
-        next_row (int): Row index of the neighboring cell.
-        next_col (int): Column index of the neighboring cell.
-        row_offset (int): Offset of the row index of the neighboring cell in the search window.
-        col_offset (int): Offset of the column index of the neighboring cell in the search window.
-        current_cost (float): Current accumulated cost to reach the current cell.
-        init_elevation (float): Initial elevation of the pit cell.
-        dem (np.ndarray): Digital Elevation Model (DEM) array.
-        dem_no_data_value (float): No data value in the DEM.
-        costs_array (np.ndarray): Array to store the accumulated costs to reach each cell.
-        prev_rows_array (np.ndarray): Array to store the previous row indices of the path.
-        prev_cols_array (np.ndarray): Array to store the previous column indices of the path.
-        heap (list[GridCell]): Priority queue storing cells to be processed.
-        multiplier (float): Multiplier factor for calculating cost considering diagonal movement.
-        current_row (int): Row index of the current cell.
-        current_col (int): Column index of the current cell.
+        - pit_index (int): Index of the pit being processed. Used to index the cost, prev_col, and prev_row arrays.
+        - next_row (int): Row index of the neighboring cell.
+        - next_col (int): Column index of the neighboring cell.
+        - row_offset (int): Offset of the row index of the neighboring cell in the search window.
+        - col_offset (int): Offset of the column index of the neighboring cell in the search window.
+        - current_cell_cost (float): Current accumulated cost to reach the current cell.
+        - initial_elevation (float): Initial elevation of the pit cell.
+        - dem (np.ndarray): Digital Elevation Model (DEM) array.
+        - dem_no_data_value (float): No data value in the DEM.
+        - costs_array (np.ndarray): 3D array storing the accumulated costs of reaching
+          each cell in the grid.
+        - prev_rows_array (np.ndarray): 3D array storing the row indices of the previous
+          cells for each cell in the grid.
+        - prev_cols_array (np.ndarray): 3D array storing the column indices of the previous
+          cells for each cell in the grid.
+        - heap (list[GridCell]): Priority queue storing cells to be processed.
+        - cost_multiplier (float): Multiplier factor for calculating cost considering diagonal movement.
+        - current_row (int): Row index of the current cell.
+        - current_col (int): Column index of the current cell.
 
     Returns:
         None
     """
-    next_elevation = dem[next_row, next_col]
+    next_elevation = dem[neighbor_row, neighbor_col]
     if next_elevation == dem_no_data_value or math.isnan(next_elevation):
         next_elevation = -np.inf  # nodata cells are treated as most negative elevation
     if next_elevation != -np.inf:
-        next_cost = current_cost + multiplier * (next_elevation - init_elevation)
+        next_cost = current_cell_cost + cost_multiplier * (
+            next_elevation - initial_elevation
+        )
     else:
-        next_cost = current_cost
+        next_cost = current_cell_cost
     # if the cost is less than the current cost of the neighbor
-    if next_cost < costs_array[i, next_row + row_offset, next_col + col_offset]:
+    if (
+        next_cost
+        < costs_array[pit_index, neighbor_row + row_offset, neighbor_col + col_offset]
+    ):
         # update the cost and previous cell of the neighbor
-        costs_array[i, next_row + row_offset, next_col + col_offset] = next_cost
-        prev_rows_array[i, next_row + row_offset, next_col + col_offset] = current_row
-        prev_cols_array[i, next_row + row_offset, next_col + col_offset] = current_col
+        costs_array[pit_index, neighbor_row + row_offset, neighbor_col + col_offset] = (
+            next_cost
+        )
+        prev_rows_array[
+            pit_index, neighbor_row + row_offset, neighbor_col + col_offset
+        ] = current_row
+        prev_cols_array[
+            pit_index, neighbor_row + row_offset, neighbor_col + col_offset
+        ] = current_col
         # enqueue the neighbor
-        heapq.heappush(heap, GridCell(next_row, next_col, next_cost))
+        heapq.heappush(heap, GridCell(neighbor_row, neighbor_col, next_cost))
 
 
 @njit
 def reconstruct_path(
-    i: int,
-    row: int,
-    col: int,
+    pit_index: int,
+    breach_point_row: int,
+    breach_point_col: int,
     final_elevation: float,
     init_elevation: float,
     dem: np.ndarray,
@@ -90,7 +105,7 @@ def reconstruct_path(
     prev_cols_array: np.ndarray,
     row_offset: int,
     col_offset: int,
-):
+) -> None:
     """
     Reconstruct the least-cost path from the final breach point to the pit cell.
 
@@ -98,26 +113,29 @@ def reconstruct_path(
     information stored in the previous cell arrays. It applies gradient to the DEM to create the breach path.
 
     Parameters:
-        i (int): Index of the pit being processed.
-        row (int): Row index of the final breach point.
-        col (int): Column index of the final breach point.
-        final_elevation (float): Elevation of the final breach point.
-        init_elevation (float): Initial elevation of the pit cell.
-        dem (np.ndarray): Digital Elevation Model (DEM) array.
-        prev_rows_array (np.ndarray): Array storing the previous row indices of the path.
-        prev_cols_array (np.ndarray): Array storing the previous column indices of the path.
-        row_offset (int): Offset of the row index of the final breach point in the search window.
-        col_offset (int): Offset of the column index of the final breach point in the search window.
+        - pit_index (int): Index of the pit being processed. Used to index the prev_row and prev_col arrays.
+        - breach_point_row (int): Row index of the final breach point.
+        - breach_point_col (int): Column index of the final breach point.
+        - final_elevation (float): Elevation of the final breach point.
+        - init_elevation (float): Initial elevation of the pit cell.
+        - dem (np.ndarray): Digital Elevation Model (DEM) array.
+        - prev_rows_array (np.ndarray): 3D array storing the row indices of the previous
+          cells for each cell in the grid.
+        - prev_cols_array (np.ndarray): 3D array storing the column indices of the previous
+          cells for each cell in the grid.
+        - row_offset (int): Offset of the row index of the final breach point in the search window.
+        - col_offset (int): Offset of the column index of the final breach point in the search window.
 
     Returns:
         None
     """
     path = []
+    row, col = breach_point_row, breach_point_col
     while UNVISITED_INDEX not in (row, col):
         path.append((row, col))
         row, col = (
-            prev_rows_array[i, row + row_offset, col + col_offset],
-            prev_cols_array[i, row + row_offset, col + col_offset],
+            prev_rows_array[pit_index, row + row_offset, col + col_offset],
+            prev_cols_array[pit_index, row + row_offset, col + col_offset],
         )
     # remove last cell in path since we don't want to modify the pit cell
     path.pop()
@@ -375,11 +393,26 @@ def breach_paths_least_cost(
     output_band.SetNoDataValue(input_nodata)
 
     # allocate memory for the costs and previous cells
+    # two parameters drive the memory requirements here
+
+    # search_radius: This parameter determines the size of the search window around each pit.
+    # The search window is a square with side length 2 * search_radius + 1. Therefore, the memory
+    # required for storing the cost, previous row, and previous column arrays is proportional to
+    # max_pits * (2 * search_radius + 1) ** 2.
+
+    # max_pits: This parameter determines the maximum number of pits that can be processed in parallel.
+    # More pits will require more memory for storing the cost, previous row, and previous column
+    # arrays, but will also allow more efficient use of the CPU. This should not
+    # be set larger than the number of available processing cores.
     search_window_size = 2 * search_radius + 1
     chunk_costs_array, chunk_prev_rows_array, chunk_prev_cols_array = (
         allocate_memory_for_costs_and_prev_cells(search_window_size, max_pits)
     )
 
+    ## chunk_size: This parameter determines the size of the chunks into which the input raster is
+    ## divided for processing. Larger chunk sizes will require more memory but can potentially improve
+    ## performance by processing more data in RAM at once
+    ## The memory required for storing the chunk data is proportional to chunk_size ** 2.
     for chunk in raster_chunker(
         input_band, chunk_size=chunk_size, chunk_buffer_size=search_radius
     ):
