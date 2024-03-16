@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from overflow.fix_flats import flat_edges, label_flats
+from overflow.fix_flats import flat_edges, label_flats, away_from_higher
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_EAST,
@@ -197,3 +197,32 @@ def test_label_flats(dem, expected_flat_labels):
     new_label = 1
     label_flats(dem, labels, new_label, flat_row, flat_col)
     assert np.array_equal(labels, expected_flat_labels)
+
+
+def test_away_from_higher(fdr, expected_high_edges, expected_flat_labels):
+    """Test the away_from_higher function.
+
+    Args:
+        fdr (np.ndarray): A flow direction raster
+        expected_high_edges (list): A list of tuples containing the expected high edges
+        expected_flat_labels (np.ndarray): A 2D array containing the expected labels for the flat area
+    """
+    flat_mask = np.zeros(fdr.shape, dtype=np.int32)
+    flat_height = np.zeros((1), dtype=np.int32)
+    high_edges = expected_high_edges
+    labels = expected_flat_labels
+    away_from_higher(labels, flat_mask, fdr, high_edges, flat_height)
+    assert flat_height[0] == 3
+    expected_flat_mask = np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 2, 2, 2, 1, 0],
+            [0, 1, 2, 3, 2, 1, 0],
+            [0, 1, 2, 2, 2, 1, 0],
+            [0, 0, 0, 0, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+        ],
+        np.int32,
+    )
+    assert np.array_equal(flat_mask, expected_flat_mask)

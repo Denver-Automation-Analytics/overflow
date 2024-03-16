@@ -105,3 +105,61 @@ def label_flats(
             neighbor_row = row + d_row
             neighbor_col = col + d_col
             to_be_filled.append((neighbor_row, neighbor_col))
+
+
+def away_from_higher(
+    labels: np.ndarray,
+    flat_mask: np.ndarray,
+    fdr: np.ndarray,
+    high_edges: list,
+    flat_height: np.array,
+) -> None:
+    """Algorithm 5 AwayFromHigher: This procedure builds a gradient away from higher terrain,
+    as described in §2.3 and Fig. 1.
+    Upon entry:
+    (1) Every cell in Labels is marked either 0, indicating that the cell is not part of a flat,
+    or a number greater than zero which identifies the flat to which the cell belongs.
+    (2) Any cell without a local gradient is marked NoFlow in FlowDirs.
+    (3) Every cell in FlatMask is initialized to 0. (4) HighEdges contains, in no particular order,
+    all the high edge cells of the DEM which are part of drainable flats.
+    At exit:
+    (1) flat_height has an entry for each label value of Labels indicating the maximal number of
+    increments to be applied to the flat identified by that label.
+    (2) flat_mask contains the number of increments to be applied to each cell to form a gradient
+    away from higher terrain; cells not in a flat have a value of 0.
+
+    Args:
+        labels (np.ndarray): The labels of each flat, same shape as the DEM. 0 means not part of a flat.
+        flat_mask (np.ndarray): The flat mask, same shape as the DEM. 0 means not part of a flat.
+        fdr (np.ndarray): The flow direction raster
+        high_edges (np.ndarray): The high edge cells of the DEM. In no particular order. FIFO queue.
+        flat_height (np.array): The flat height array, size of the number of flats
+    """
+    loops = 1
+    marker = (-1, -1)
+    high_edges.append(marker)
+    while len(high_edges) > 1:
+        row, col = high_edges.pop(0)
+        if row == marker[0] and col == marker[1]:
+            loops += 1
+            high_edges.append(marker)
+            continue
+        if flat_mask[row, col] > 0:
+            continue
+        flat_mask[row, col] = loops
+        flat_height[labels[row, col] - 1] = loops
+        for d_row, d_col in NEIGHBOR_OFFSETS:
+            neighbor_row = row + d_row
+            neighbor_col = col + d_col
+            if (
+                neighbor_row < 0
+                or neighbor_row >= labels.shape[0]
+                or neighbor_col < 0
+                or neighbor_col >= labels.shape[1]
+            ):
+                continue
+            if (
+                labels[neighbor_row, neighbor_col] == labels[row, col]
+                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
+            ):
+                high_edges.append((neighbor_row, neighbor_col))
