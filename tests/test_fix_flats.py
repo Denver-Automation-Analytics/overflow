@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from overflow.fix_flats import flat_edges, label_flats, away_from_higher
+from overflow.fix_flats import flat_edges, label_flats, away_from_higher, towards_lower
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_EAST,
@@ -221,6 +221,46 @@ def test_away_from_higher(fdr, expected_high_edges, expected_flat_labels):
             [0, 1, 2, 3, 2, 1, 0],
             [0, 1, 2, 2, 2, 1, 0],
             [0, 0, 0, 0, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+        ],
+        np.int32,
+    )
+    assert np.array_equal(flat_mask, expected_flat_mask)
+
+
+def test_towards_lower(fdr, expected_low_edges, expected_flat_labels):
+    """Test the towards_lower function.
+
+    Args:
+        fdr (np.ndarray): A flow direction raster
+        expected_low_edges (list): A list of tuples containing the expected low edges
+        expected_flat_labels (np.ndarray): A 2D array containing the expected labels for the flat area
+    """
+    flat_mask = np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 1, 2, 2, 2, 1, 0],
+            [0, 1, 2, 3, 2, 1, 0],
+            [0, 1, 2, 2, 2, 1, 0],
+            [0, 0, 0, 0, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+        ],
+        np.int32,
+    )  # from the previous test we know the flat mask is this
+    flat_height = np.zeros((1), dtype=np.int32)
+    flat_height[0] = 3  # from the previous test we know the flat height is 3
+    low_edges = expected_low_edges
+    labels = expected_flat_labels
+    towards_lower(labels, flat_mask, fdr, low_edges, flat_height)
+    expected_flat_mask = np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 12, 12, 12, 12, 12, 0],
+            [0, 10, 9, 9, 9, 10, 0],
+            [0, 8, 7, 6, 7, 8, 0],
+            [0, 6, 5, 5, 5, 8, 0],
+            [0, 2, 2, 2, 6, 8, 0],
             [0, 0, 0, 0, 0, 0, 0],
         ],
         np.int32,

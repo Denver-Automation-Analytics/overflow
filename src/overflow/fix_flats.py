@@ -167,3 +167,70 @@ def away_from_higher(
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
                 high_edges.append((neighbor_row, neighbor_col))
+
+
+@njit
+def towards_lower(
+    labels: np.ndarray,
+    flat_mask: np.ndarray,
+    fdr: np.ndarray,
+    low_edges: list,
+    flat_height: np.array,
+) -> None:
+    """Algorithm 6 TowardsLower:  This procedure builds a gradient towards lower terrain and
+    combines it with the gradient away from higher terrain, as described in §2.4 and Fig. 2.
+    Upon entry:
+    (1) Every cell in Labels is marked either 0, indicating that the cell is not part of a flat,
+    or a number greater than zero which identifies the flat to which the cell belongs.
+    (2) Any cell without a local gradient is marked NoFlow in FlowDirs.
+    (3) Every cell in FlatMask has either a value of 0, indicating that the cell is not part of
+    a flat, or a value greater than zero indicating the number of increments which must be
+    added to it to form a gradient away from higher terrain.
+    (4) FlatHeight has an entry for each label value of Labels indicating the maximal number
+    of increments to be applied to the flat identified by that label in order to form the
+    gradient away from higher terrain.
+    (5) LowEdges contains, in no particular order, all the low edge cells of the DEM.
+    At exit:
+    (1) FlatMask contains the number of increments to be applied to each cell to form a
+    superposition of the gradient away from higher terrain with the gradient towards lower
+    terrain; cells not in a flat have a value of 0.
+
+    Args:
+        labels (np.ndarray): The labels of each flat, same shape as the DEM. 0 means not part of a flat.
+        flat_mask (np.ndarray): The flat mask, same shape as the DEM. 0 means not part of a flat.
+        fdr (np.ndarray): The flow direction raster
+        low_edges (np.ndarray): The low edge cells of the DEM. In no particular order. FIFO queue.
+        flat_height (np.array): The flat height array, size of the number of flats
+    """
+    # make all entries in flat_mask negative
+    flat_mask *= -1
+    loops = 1
+    marker = (-1, -1)
+    low_edges.append(marker)
+    while len(low_edges) > 1:
+        row, col = low_edges.pop(0)
+        if row == marker[0] and col == marker[1]:
+            loops += 1
+            low_edges.append(marker)
+            continue
+        if flat_mask[row, col] > 0:
+            continue
+        if flat_mask[row, col] < 0:
+            flat_mask[row, col] += flat_height[labels[row, col] - 1] + 2 * loops
+        else:
+            flat_mask[row, col] = 2 * loops
+        for d_row, d_col in NEIGHBOR_OFFSETS:
+            neighbor_row = row + d_row
+            neighbor_col = col + d_col
+            if (
+                neighbor_row < 0
+                or neighbor_row >= labels.shape[0]
+                or neighbor_col < 0
+                or neighbor_col >= labels.shape[1]
+            ):
+                continue
+            if (
+                labels[neighbor_row, neighbor_col] == labels[row, col]
+                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
+            ):
+                low_edges.append((neighbor_row, neighbor_col))
