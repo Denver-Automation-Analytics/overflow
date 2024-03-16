@@ -67,17 +67,18 @@ def label_flats(
     """Algorithm 4 LabelFlats: This flood-fill function gives all the cells of a flat a common label,
     as described by §2.2. https://rbarnes.org/sci/2014_flats.pdf
     Upon entry:
-    (1) DEM contains the elevations of every cell or a value NoData for cells not part of the DEM.
+    (1) dem contains the elevations of every cell or a value NoData for cells not part of the DEM.
     (2) Labels has the same dimensions as DEM.
-    (3) c belongs to the flat which is to be labeled.
-    (4) L is a unique label which has not been previously applied to a flat.
-    (5) Labels has been initialized to zero prior to the first call to this function.
-    (6) Labels has values greater than or equal to 1 for each processed cell which is in a flat.
+    (3) flat_row, flat_col belongs to the flat which is to be labeled.
+    (4) new_label is a unique label which has not been previously applied to a flat.
+    (5) labels has been initialized to zero prior to the first call to this function.
+    (6) labels has values greater than or equal to 1 for each processed cell which is in a flat.
     Each flat's cells bear a label unique to that flat.
     At exit:
-    (1) c and every cell reachable from c by passing over only cells of the same elevation as c
-    (all the cells in the flat to which c belongs) is marked as L in Labels.
-    (2) Labels has been updated to reflect the new labels which have been applied.
+    (1) flat_row, flat_col and every cell reachable from flat_row, flat_col by passing over only
+    cells of the same elevation as flat_row, flat_col (all the cells in the flat to which c belongs)
+    is marked as new_label in Labels.
+    (2) labels has been updated to reflect the new labels which have been applied.
 
     Args:
         dem (np.ndarray): The digital elevation model
