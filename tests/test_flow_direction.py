@@ -1,12 +1,24 @@
 import pytest
 import numpy as np
 from osgeo import gdal
-from overflow.util.raster import raster_chunker
-from overflow.generate_flow_direction_raster import flow_direction
+import click.testing
+from overflow.flow_direction import flow_direction, flow_direction_for_tile
+from overflow.constants import (
+    FLOW_DIRECTION_EAST,
+    FLOW_DIRECTION_NORTH_EAST,
+    FLOW_DIRECTION_NORTH,
+    FLOW_DIRECTION_NORTH_WEST,
+    FLOW_DIRECTION_WEST,
+    FLOW_DIRECTION_SOUTH_WEST,
+    FLOW_DIRECTION_SOUTH,
+    FLOW_DIRECTION_SOUTH_EAST,
+    FLOW_DIRECTION_UNDEFINED,
+)
+from overflow_cli import flow_direction_cli
 
 
-@pytest.fixture
-def raster_file_path():
+@pytest.fixture(name="raster_file_path")
+def fixture_raster_file_path():
     """Create a raster band for testing.
 
     Yields:
@@ -36,20 +48,113 @@ def raster_file_path():
     gdal.Unlink(output_path)
 
 
-def test_flow_direction(raster_file_path):
+@pytest.fixture(name="dem")
+def fixture_dem():
+    """Create a dem for testing.
 
-    expected = np.array(
+    Returns:
+        np.ndarray: A dem of size 5x5.
+    """
+    return np.array(
         [
-            [1, 1, 1, 1, 255],
-            [128, 128, 128, 64, 64],
-            [255, 2, 4, 8, 255],
-            [255, 1, 255, 16, 255],
-            [255, 128, 64, 32, 255],
-        ]
+            [-9999, -9999, -9999, -9999, -9999, -9999, -9999],
+            [-9999, 5, 4, 3, 2, 1, -9999],
+            [-9999, 5, 5, 5, 5, 5, -9999],
+            [-9999, 5, 5, 5, 5, 5, -9999],
+            [-9999, 5, 5, 4, 5, 5, -9999],
+            [-9999, 5, 5, 5, 5, 5, -9999],
+            [-9999, -9999, -9999, -9999, -9999, -9999, -9999],
+        ],
+        dtype=np.float32,
     )
+
+
+@pytest.fixture(name="expected_fdr")
+def fixture_expected_fdr():
+    """Create the expected_fdr for the test dem.
+
+    Returns:
+        np.ndarray: A dem of size 5x5.
+    """
+    return np.array(
+        [
+            [
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_EAST,
+            ],
+        ],
+        dtype=np.uint8,
+    )
+
+
+def test_flow_direction_from_file(raster_file_path, expected_fdr):
+    """Test the flow direction function from a raster file."""
     results_path = "/vsimem/test_flow_direction_results.tif"
     flow_direction(raster_file_path, results_path, chunk_size=5)
     result = gdal.Open(results_path)
     band = result.GetRasterBand(1)
-    band = result.ReadAsArray(0, 0, result.RasterXSize, result.RasterYSize).astype(int)
-    assert np.array_equal(band, expected)
+    fdr = band.ReadAsArray()
+    assert np.array_equal(fdr, expected_fdr)
+
+
+def test_flow_direction_from_dem(dem, expected_fdr):
+    """Test the flow direction function from a raster file."""
+    fdr = flow_direction_for_tile(dem, -9999)
+    # remove buffer
+    fdr = fdr[1:-1, 1:-1]
+    assert np.array_equal(fdr, expected_fdr)
+
+
+def test_flow_direction_cli(raster_file_path, expected_fdr):
+    """Test the CLI."""
+    output_path = "/vsimem/test_flow_direction_cli.tif"
+    runner = click.testing.CliRunner()
+    result = runner.invoke(
+        flow_direction_cli,
+        [
+            "--input_file",
+            raster_file_path,
+            "--output_file",
+            output_path,
+            "--chunk_size",
+            "5",
+        ],
+    )
+    assert result.exit_code == 0
+    dataset = gdal.Open(output_path)
+    band = dataset.GetRasterBand(1)
+    fdr = band.ReadAsArray()
+    assert np.array_equal(fdr, expected_fdr)
+    dataset = None
+    gdal.Unlink(output_path)

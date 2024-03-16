@@ -3,17 +3,23 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 from .util.raster import raster_chunker
+from .constants import (
+    FLOW_DIRECTION_NODATA,
+    FLOW_DIRECTION_UNDEFINED,
+    FLOW_DIRECTIONS,
+    NEIGHBOR_OFFSETS,
+)
 
 
 @njit(parallel=True)
-def generate_flow_direction_raster(dem: np.ndarray, nodata_value: float) -> np.ndarray:
+def flow_direction_for_tile(dem: np.ndarray, nodata_value: float) -> np.ndarray:
     """
     Define the 8 directions using a list of tuples
-     32   |   64   |  128
+       3  |   2    |  1
      ------------------
-     16   |  255   |  1
+       4  |   8   |  0
      ------------------
-     8    |   4   |  2
+       5  |   6   |  7
 
     This function is used to calculate flow direction in a chunk of a DEM.
     The function takes a chunk of a DEM as input and returns a chunk of DEM with flow direction values.
@@ -28,31 +34,8 @@ def generate_flow_direction_raster(dem: np.ndarray, nodata_value: float) -> np.n
     np.ndarray
         A chunk of a DEM with flow direction values.
     """
-    # order is optimized for cache access
-    d8_directions_array = [
-        32,  # North West
-        64,  # North
-        128,  # North East
-        16,  # West
-        1,  # East
-        8,  # South West
-        4,  # South
-        2,  # South East
-    ]
-
-    # locations defined as (row,col), position in array matches d8_directions_array
-    directions = [
-        (-1, -1),  # North West
-        (-1, 0),  # North
-        (-1, 1),  # North East
-        (0, -1),  # West
-        (0, 1),  # East
-        (1, -1),  # South west
-        (1, 0),  # South
-        (1, 1),  # South East
-    ]
     # np.empty is faster than np.full
-
+    # all elements will be set by the algorithm
     fdr = np.empty(dem.shape, dtype=np.uint8)
 
     # Get the shape of the chunk
@@ -68,7 +51,7 @@ def generate_flow_direction_raster(dem: np.ndarray, nodata_value: float) -> np.n
                 max_index = -1
                 all_non_positive = True
 
-                for i, (dy, dx) in enumerate(directions):
+                for i, (dy, dx) in enumerate(NEIGHBOR_OFFSETS):
                     slope = calculate_slope(dem, row, col, dy, dx, nodata_value)
                     if slope > max_slope:
                         max_slope = slope
@@ -77,9 +60,11 @@ def generate_flow_direction_raster(dem: np.ndarray, nodata_value: float) -> np.n
                         all_non_positive = False
 
                 if all_non_positive:
-                    fdr[row, col] = 255
+                    fdr[row, col] = FLOW_DIRECTION_UNDEFINED
                 else:
-                    fdr[row, col] = d8_directions_array[max_index]
+                    fdr[row, col] = FLOW_DIRECTIONS[max_index]
+            else:
+                fdr[row, col] = FLOW_DIRECTION_NODATA
 
     return fdr
 
@@ -104,7 +89,7 @@ def calculate_slope(
         The slope between the cell and its neighbor. Positive slopes indicate downhill flow.
     """
     if dem[row + dy, col + dx] == nodata_value:
-        return -np.inf
+        return np.inf
 
     return (dem[row, col] - dem[row + dy, col + dx]) / (
         math.sqrt(2) if dx != 0 and dy != 0 else 1
@@ -132,9 +117,8 @@ def flow_direction(input_path, output_path, chunk_size=4000):
     dataset.SetProjection(projection)
     dataset.SetGeoTransform(transform)
     output_band = dataset.GetRasterBand(1)
-    output_band.SetNoDataValue(nodata_value)
+    output_band.SetNoDataValue(FLOW_DIRECTION_NODATA)
     for chunk in raster_chunker(band, chunk_size=chunk_size, chunk_buffer_size=1):
-        result = generate_flow_direction_raster(chunk.data, nodata_value)
-        result[chunk.data == nodata_value] = nodata_value
+        result = flow_direction_for_tile(chunk.data, nodata_value)
         chunk.from_numpy(result)
         chunk.write(output_band)

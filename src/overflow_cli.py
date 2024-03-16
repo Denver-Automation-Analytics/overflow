@@ -1,7 +1,7 @@
 import click
 
 from overflow.breach_single_cell_pits import breach_single_cell_pits
-from overflow.generate_flow_direction_raster import flow_direction
+from overflow.flow_direction import flow_direction
 from overflow.breach_paths_least_cost import breach_paths_least_cost
 from overflow.constants import (
     DEFAULT_CHUNK_SIZE,
@@ -62,10 +62,26 @@ def flow_direction_cli(input_file: str, output_file: str, chunk_size: int):
     """
     This function is used to generate flow direction rasters from chunks of a DEM.
     The function takes a chunk of a DEM as input and returns a chunk of DEM with delineated flow direction.
+
+    Parameters
+    ----------
+    input_file : str
+        Path to the input dem file
+    output_file : str
+        Path to the output file
+    chunk_size : int
+        Size of the chunk to be used for processing
+
+    Returns
+    -------
+    None
+    """
+    try:
+        flow_direction(input_file, output_file, chunk_size)
+    except Exception as exc:
+        print(f"flow_direction failed with the following exception: {str(exc)}")
         # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
         raise click.Abort()
-    """
-    pass
 
 
 @main.command(name="breach-paths-least-cost")
