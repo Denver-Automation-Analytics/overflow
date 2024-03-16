@@ -1,7 +1,9 @@
 import numpy as np
+from numba import njit
 from .constants import NEIGHBOR_OFFSETS, FLOW_DIRECTION_NODATA, FLOW_DIRECTION_UNDEFINED
 
 
+@njit
 def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     """Algorithm 3 FlatEdges: This function locates flat cells which border on
     higher and lower terrain and places them into queues for further processing,
@@ -61,6 +63,7 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     return high_edges, low_edges
 
 
+@njit
 def label_flats(
     dem: np.ndarray, labels: np.ndarray, new_label: int, flat_row: int, flat_col: int
 ) -> None:
@@ -107,6 +110,7 @@ def label_flats(
             to_be_filled.append((neighbor_row, neighbor_col))
 
 
+@njit
 def away_from_higher(
     labels: np.ndarray,
     flat_mask: np.ndarray,
