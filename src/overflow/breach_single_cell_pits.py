@@ -33,7 +33,7 @@ def breach_single_cell_pits_in_chunk(
 
     rows, cols = chunk.shape
     # Loop through each cell in the chunk
-    unsolved_pits_raster = np.zeros_like(chunk, dtype=np.int8)
+    unsolved_pits_raster = np.zeros(chunk.shape, dtype=np.int8)
     # pylint: disable=not-an-iterable
     for row in prange(2, rows - 2):
         for col in range(2, cols - 2):

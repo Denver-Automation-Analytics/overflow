@@ -13,8 +13,9 @@ from overflow_cli import breach_single_cell_pits_cli
 def fixture_raster_file_path():
     """Create a random raster band for testing.
 
+
     Yields:
-        gdal.Band: A raster band of size 100x100 with random float32 data.
+        gdal.Band: A raster band of size 5x5 with random float32 data.
     """
     output_path = "/vsimem/test_raster_breach.tif"
     driver = gdal.GetDriverByName("GTiff")
@@ -31,7 +32,7 @@ def fixture_raster_file_path():
         dtype=np.float32,
     )
     band.WriteArray(array)
-    band.SetNoDataValue(-9999)
+    band.SetNoDataValue(-np.inf)
     dataset.FlushCache()
     dataset = None
     yield output_path

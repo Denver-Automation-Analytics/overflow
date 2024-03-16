@@ -52,7 +52,7 @@ from overflow.constants import (
     UNVISITED_INDEX,
     EPSILON_GRADIENT,
     DEFAULT_CHUNK_SIZE,
-    NEIGHBORS,
+    NEIGHBOR_OFFSETS,
 )
 from overflow.util.raster import raster_chunker
 from overflow.breach_single_cell_pits import breach_single_cell_pits_in_chunk
@@ -408,7 +408,7 @@ def breach_dem(
     # Define the size of the search window
     search_window_size = 2 * search_radius + 1
     # Define the neighboring cells to consider in constant global memory
-    neighbors = cuda.const.array_like(NEIGHBORS)
+    neighbors = cuda.const.array_like(NEIGHBOR_OFFSETS)
     # Initialize the current row, column, and cost for the current pit location
     current_row[i] = pits[i, 0]
     current_col[i] = pits[i, 1]

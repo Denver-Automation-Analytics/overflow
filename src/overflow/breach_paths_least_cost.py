@@ -11,7 +11,7 @@ from .constants import (
     DEFAULT_MAX_PITS,
     UNVISITED_INDEX,
     EPSILON_GRADIENT,
-    NEIGHBORS,
+    NEIGHBOR_OFFSETS,
 )
 
 
@@ -246,7 +246,7 @@ def breach_pits_in_chunk_least_cost(
             if len(heap) >= search_window_size**2:
                 break  # pit is unsolvable with max heap size
             # for each neighbor of the current cell
-            for dr, dc in NEIGHBORS:
+            for dr, dc in NEIGHBOR_OFFSETS:
                 next_row, next_col = current_row[i] + dr, current_col[i] + dc
                 # Calculate the cost considering diagonal movement
                 multiplier = 1 if dr == 0 or dc == 0 else math.sqrt(2)
