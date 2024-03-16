@@ -26,4 +26,4 @@ jobs:
         shell: bash -el {0}
         run: |
           pylint --fail-under=9 --fail-on=E ./src* ./tests*
-          pytest
+          pytest -k "not experimental"

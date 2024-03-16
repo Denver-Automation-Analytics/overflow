@@ -1,11 +1,12 @@
 import pytest
 import numpy as np
 from osgeo import gdal
-
+import click.testing
 from overflow.breach_single_cell_pits import (
     breach_single_cell_pits_in_chunk,
     breach_single_cell_pits,
 )
+from overflow_cli import breach_single_cell_pits_cli
 
 
 @pytest.fixture(name="raster_file_path")
@@ -21,12 +22,13 @@ def fixture_raster_file_path():
     band = dataset.GetRasterBand(1)
     array = np.array(
         [
-            [100, 101, 90, 97, 90],
-            [103, 102, 80, 96, 95],
-            [94, 95, 96, 95, 94],
-            [97, 98, 95, 94, 90],
-            [95, 90, 85, 40, 92],
-        ]
+            [2, 2, 2, 2, 2],
+            [-1, 2, 2, 2, 2],
+            [2, 2, 0, 2, 2],
+            [2, 2, 2, 2, 2],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.float32,
     )
     band.WriteArray(array)
     band.SetNoDataValue(-9999)
@@ -36,53 +38,98 @@ def fixture_raster_file_path():
     gdal.Unlink(output_path)
 
 
-def test_breach_cingle_cell_pits_in_chunk():
+@pytest.fixture(name="dem_chunk")
+def fixture_dem_chunk():
+    """Create a random raster band for testing.
 
-    chunk = np.array(
+    Yields:
+        gdal.Band: A raster band of size 100x100 with random float32 data.
+    """
+    return np.array(
         [
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, 100, 101, 90, 97, 90, -999, -999],
-            [-999, -999, 103, 102, 80, 96, 95, -999, -999],
-            [-999, -999, 94, 95, 96, 95, 94, -999, -999],
-            [-999, -999, 97, 98, 95, 94, 90, -999, -999],
-            [-999, -999, 95, 90, 85, 40, 92, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
+            [-999, -999, -1, 2, 2, 2, 2, -999, -999],
+            [-999, -999, 2, 2, 0, 2, 2, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-        ]
+        ],
+        dtype=np.float32,
     )
+
+
+def test_breach_cingle_cell_pits_in_chunk(dem_chunk):
+    """Test the single cell pits are breached in a chunk."""
     expected = np.array(
         [
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-            [-999, -999, 100, 90, 90, 97, 90, -999, -999],
-            [-999, -999, 97, 87, 80, 85, 95, -999, -999],
-            [-999, -999, 94, 95, 96, 95, 94, -999, -999],
-            [-999, -999, 97, 92, 95, 94, 90, -999, -999],
-            [-999, -999, 95, 90, 85, 40, 92, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
+            [-999, -999, -1, 2, 2, 2, 2, -999, -999],
+            [-999, -999, 2, -0.5, 0, 2, 2, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
+            [-999, -999, 2, 2, 2, 2, 2, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
             [-999, -999, -999, -999, -999, -999, -999, -999, -999],
-        ]
+        ],
+        dtype=np.float32,
     )
     nodata_value = -999
-    _ = breach_single_cell_pits_in_chunk(chunk, nodata_value)
-    assert (chunk & expected).all()
+    breach_single_cell_pits_in_chunk(dem_chunk, nodata_value)
+    assert np.allclose(dem_chunk, expected)
 
 
 def test_breach_single_cell_pits(raster_file_path):
-
+    """Test the single cell pits are breached in a raster file."""
     expected = np.array(
         [
-            [100, 90, 90, 97, 90],
-            [97, 87, 80, 85, 95],
-            [94, 95, 96, 95, 94],
-            [97, 92, 95, 94, 90],
-            [95, 90, 85, 40, 92],
-        ]
+            [2, 2, 2, 2, 2],
+            [-1, 2, 2, 2, 2],
+            [2, -0.5, 0, 2, 2],
+            [2, 2, 2, 2, 2],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.float32,
     )
     results_path = "/vsimem/test_breach_single_cell_pits.tif"
     breach_single_cell_pits(raster_file_path, results_path, chunk_size=5)
     result = gdal.Open(results_path)
     band = result.GetRasterBand(1)
-    band = result.ReadAsArray(0, 0, result.RasterXSize, result.RasterYSize).astype(int)
-    assert (band & expected).all()
+    band_array = band.ReadAsArray(0, 0, result.RasterXSize, result.RasterYSize)
+    assert np.allclose(band_array, expected)
+
+
+def test_breach_single_cell_pits_cli(raster_file_path):
+    """Test the CLI."""
+    output_path = "/vsimem/test_breach_single_cell_pits_cli.tif"
+    runner = click.testing.CliRunner()
+    result = runner.invoke(
+        breach_single_cell_pits_cli,
+        [
+            "--input_file",
+            raster_file_path,
+            "--output_file",
+            output_path,
+            "--chunk_size",
+            "5",
+        ],
+    )
+    assert result.exit_code == 0
+    dataset = gdal.Open(output_path)
+    band = dataset.GetRasterBand(1)
+    array = band.ReadAsArray()
+    expected_dem = np.array(
+        [
+            [2, 2, 2, 2, 2],
+            [-1, 2, 2, 2, 2],
+            [2, -0.5, 0, 2, 2],
+            [2, 2, 2, 2, 2],
+            [2, 2, 2, 2, 2],
+        ],
+        dtype=np.float32,
+    )
+    assert np.allclose(array, expected_dem)
+    gdal.Unlink(output_path)
