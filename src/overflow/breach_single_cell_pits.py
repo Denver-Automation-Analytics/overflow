@@ -2,13 +2,14 @@ import numpy as np
 from numba import njit, prange
 from osgeo import gdal
 
-from .util.raster import raster_chunker
+from overflow.util.raster import raster_chunker
+from overflow.constants import DEFAULT_CHUNK_SIZE
 
 
 @njit(parallel=True)
 def breach_single_cell_pits_in_chunk(
-    chunk, nodata_value
-) -> tuple[np.ndarray, np.ndarray]:
+    chunk: np.ndarray, nodata_value: float
+) -> np.ndarray:
     """
     This function is used to breach single cell pits in a chunk of a DEM.
     The function takes a chunk of a DEM as input and returns a chunk of DEM with breached single cell pits.
@@ -41,7 +42,7 @@ def breach_single_cell_pits_in_chunk(
                 flag = True
                 for k in range(8):
                     zn = chunk[row + dy[k], col + dx[k]]
-                    if zn < z and zn != nodata_value:
+                    if zn <= z or zn == nodata_value:
                         flag = False
                         break
 
@@ -51,10 +52,11 @@ def breach_single_cell_pits_in_chunk(
     pit_indicies = np.argwhere(unsolved_pits_raster == 1)
 
     for row, col in pit_indicies:
+        solved = False
         z = chunk[row, col]
         for k in range(16):
             zn = chunk[row + dy2[k], col + dx2[k]]
-            if zn < z and zn != nodata_value:
+            if zn <= z or zn == nodata_value:
                 solved = True
                 chunk[row + dy[breachcell[k]], col + dx[breachcell[k]]] = (z + zn) / 2
         if solved:
@@ -63,7 +65,9 @@ def breach_single_cell_pits_in_chunk(
     return unsolved_pits_raster
 
 
-def breach_single_cell_pits(input_path, output_path, chunk_size=2000):
+def breach_single_cell_pits(
+    input_path: str, output_path: str, chunk_size: int = DEFAULT_CHUNK_SIZE
+):
     input_raster = gdal.Open(input_path)
     projection = input_raster.GetProjection()
     transform = input_raster.GetGeoTransform()

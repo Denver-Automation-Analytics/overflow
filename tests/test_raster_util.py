@@ -3,6 +3,8 @@ import pytest
 from osgeo import gdal
 from overflow.util.raster import raster_chunker, read_raster_with_bounds_handling
 
+# pylint: disable=protected-access
+
 
 @pytest.fixture(name="raster_band")
 def fixture_raster_band():

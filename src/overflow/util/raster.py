@@ -2,6 +2,8 @@ from typing import Iterator
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
+from numba import int64, float32
+from numba.experimental import jitclass
 
 gdal.UseExceptions()
 
@@ -205,3 +207,28 @@ def raster_chunker(
             )
             chunk.read(band)
             yield chunk
+
+
+# Define the Numba specification for the GridCell jitclass
+spec = [
+    ("row", int64),
+    ("column", int64),
+    ("cost", float32),
+]
+
+
+@jitclass(spec)
+class GridCell:
+    """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
+
+    def __init__(self, row, column, cost):
+        self.row = row
+        self.column = column
+        self.cost = cost
+
+    # Define comparison methods based on the cost attribute so this can be used in a heapq
+    def __lt__(self, other):
+        return self.cost < other.cost
+
+    def __eq__(self, other):
+        return self.cost == other.cost
