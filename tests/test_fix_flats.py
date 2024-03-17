@@ -6,6 +6,7 @@ from overflow.fix_flats import (
     away_from_higher,
     towards_lower,
     resolve_flats,
+    d8_masked_flow_dirs,
 )
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
@@ -295,3 +296,78 @@ def test_resolve_flats(dem, fdr, expected_final_flat_mask, expected_flat_labels)
     flat_mask, labels = resolve_flats(dem, fdr)
     assert np.array_equal(flat_mask, expected_final_flat_mask)
     assert np.array_equal(labels, expected_flat_labels)
+
+
+def test_d8_masked_flow_dirs(fdr, expected_final_flat_mask, expected_flat_labels):
+    """Test the d8_masked_flow_dirs function."""
+    test_fdr = fdr.copy()
+    d8_masked_flow_dirs(expected_final_flat_mask, test_fdr, expected_flat_labels)
+    expected_fdr = np.array(
+        [
+            [
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH_WEST,
+            ],
+        ],
+        dtype=np.uint8,
+    )
+    assert np.array_equal(test_fdr, expected_fdr)

@@ -1,6 +1,12 @@
+import math
 import numpy as np
 from numba import njit
-from .constants import NEIGHBOR_OFFSETS, FLOW_DIRECTION_NODATA, FLOW_DIRECTION_UNDEFINED
+from .constants import (
+    NEIGHBOR_OFFSETS,
+    FLOW_DIRECTION_NODATA,
+    FLOW_DIRECTION_UNDEFINED,
+    FLOW_DIRECTIONS,
+)
 
 
 @njit
@@ -298,3 +304,58 @@ def resolve_flats(
     towards_lower(labels, flat_mask, flow_dirs, low_edges, flat_height)
 
     return flat_mask, labels
+
+
+@njit
+def d8_masked_flow_dirs(
+    flat_mask: np.ndarray, fdr: np.ndarray, labels: np.ndarray
+) -> None:
+    """
+    Determine flow directions across flats using the provided flat_mask and labels arrays.
+    This is algorithm 7 from the paper https://rbarnes.org/sci/2014_flats.pdf.
+
+    This function iterates over each cell in the fdr array and determines the flow direction
+    for cells within flats. If a cell doesn't have a flow direction (i.e., it's not NoData and not
+    already assigned a direction), it searches its neighbors within the same flat and selects the
+    neighbor with the minimum flat_mask value to determine the direction of flow. Finally, it assigns
+    the selected direction to the current cell.
+
+    Args:
+        flat_mask (np.ndarray): Array containing the number of increments to be applied to each cell
+            to form a gradient which will drain the flat it is a part of.
+        fdr (np.ndarray): Array containing flow directions for each cell. Cells without a local
+            gradient have a value of NoFlow, while all other cells have defined flow directions.
+        labels (np.ndarray): Array indicating which flat each cell is a member of. Cells in a flat
+            have a value greater than zero indicating the label of the flat, otherwise, they have a
+            value of 0.
+
+    Returns:
+        None: The function modifies the fdr array in place.
+    """
+    for row, col in np.ndindex(fdr.shape):
+        if fdr[row, col] == FLOW_DIRECTION_NODATA:
+            continue
+        if fdr[row, col] != FLOW_DIRECTION_UNDEFINED:
+            continue
+        nmin = FLOW_DIRECTION_UNDEFINED
+        min_slope = np.inf
+        for i, (d_row, d_col) in enumerate(NEIGHBOR_OFFSETS):
+            neighbor_row = row + d_row
+            neighbor_col = col + d_col
+            if (
+                neighbor_row < 0
+                or neighbor_row >= fdr.shape[0]
+                or neighbor_col < 0
+                or neighbor_col >= fdr.shape[1]
+            ):
+                continue
+            if labels[neighbor_row, neighbor_col] != labels[row, col]:
+                continue
+            # calculate slope
+            dz = float(flat_mask[neighbor_row, neighbor_col]) - flat_mask[row, col]
+            slope = dz / (math.sqrt(2) if d_row != 0 and d_col != 0 else 1)
+            # update minimum slope
+            if slope < min_slope:
+                min_slope = slope
+                nmin = FLOW_DIRECTIONS[i]
+        fdr[row, col] = nmin

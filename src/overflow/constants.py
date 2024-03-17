@@ -36,8 +36,6 @@ NEIGHBOR_OFFSETS = np.array(
         (1, -1),  # FLOW_SOUTH_WEST
         (1, 0),  # FLOW_SOUTH
         (1, 1),  # FLOW_SOUTH_EAST
-        (0, 0),  # FLOW_UNDEFINED
-        (0, 0),  # FLOW_NODATA
     ]
 )
 FLOW_DIRECTIONS = np.array(
