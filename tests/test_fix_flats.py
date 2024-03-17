@@ -255,7 +255,9 @@ def test_away_from_higher(fdr, expected_high_edges, expected_flat_labels):
     assert np.array_equal(flat_mask, expected_flat_mask)
 
 
-def test_towards_lower(fdr, expected_low_edges, expected_flat_labels):
+def test_towards_lower(
+    fdr, expected_low_edges, expected_flat_labels, expected_final_flat_mask
+):
     """Test the towards_lower function.
 
     Args:
@@ -280,19 +282,7 @@ def test_towards_lower(fdr, expected_low_edges, expected_flat_labels):
     low_edges = expected_low_edges
     labels = expected_flat_labels
     towards_lower(labels, flat_mask, fdr, low_edges, flat_height)
-    expected_flat_mask = np.array(
-        [
-            [0, 0, 0, 0, 0, 0, 0],
-            [0, 12, 12, 12, 12, 12, 0],
-            [0, 10, 9, 9, 9, 10, 0],
-            [0, 8, 7, 6, 7, 8, 0],
-            [0, 6, 5, 5, 5, 8, 0],
-            [0, 2, 2, 2, 6, 8, 0],
-            [0, 0, 0, 0, 0, 0, 0],
-        ],
-        np.int32,
-    )
-    assert np.array_equal(flat_mask, expected_flat_mask)
+    assert np.array_equal(flat_mask, expected_final_flat_mask)
 
 
 def test_resolve_flats(dem, fdr, expected_final_flat_mask, expected_flat_labels):
