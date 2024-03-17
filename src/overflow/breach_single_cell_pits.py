@@ -77,8 +77,8 @@ def breach_single_cell_pits(
     driver = gdal.GetDriverByName("GTiff")
     dataset = driver.Create(
         output_path,
-        input_raster.RasterYSize,
         input_raster.RasterXSize,
+        input_raster.RasterYSize,
         1,
         gdal.GDT_Float32,
     )
