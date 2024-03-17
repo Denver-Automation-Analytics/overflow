@@ -234,3 +234,67 @@ def towards_lower(
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
                 low_edges.append((neighbor_row, neighbor_col))
+
+
+@njit
+def resolve_flats(
+    dem: np.ndarray, flow_dirs: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Algorithm 1 ResolveFlats: The main body of the algorithm, as described in §2.1.
+    Upon entry:
+    (1) DEM contains the elevations of every cell or a value NoData for cells not part of the DEM.
+    (2) FlowDirs contains the flow direction of every cell; cells without a local gradient are
+    marked NoFlow. Algorithm 2 provides an example of how this might be done.
+    At exit:
+    (1) FlatMask has a value greater than or equal to zero for each cell, indicating its number of
+    increments. These can be used be used in conjunction with Labels to determine flow directions
+    without altering the DEM, as exemplified by Algorithm 7, or to alter the DEM in subtle ways to
+    direct flow, as exemplified by Algorithm 8.
+    (2) Labels has values greater than or equal to 1 for each cell which is in a flat. Each flats'
+    cells bear a label unique to that flat.
+
+    Args:
+        dem (np.ndarray): The digital elevation model
+        flow_dirs (np.ndarray): The flow direction raster
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: A tuple containing the FlatMask and Labels arrays
+    """
+    # Initialize FlatMask and Labels arrays
+    flat_mask = np.zeros_like(dem, dtype=np.int32)
+    labels = np.zeros_like(dem, dtype=np.int32)
+
+    # Find flat edges
+    high_edges, low_edges = flat_edges(dem, flow_dirs)
+
+    # Check if there are undrainable flats
+    if not low_edges:
+        if high_edges:
+            print("There were undrainable flats")
+        else:
+            print("There were no flats")
+        return flat_mask, labels
+
+    label = 1
+    # Label flats from low edges
+    for row, col in low_edges:
+        if labels[row, col] == 0:
+            label_flats(dem, labels, label, row, col)
+            label += 1
+
+    # Remove unlabeled cells from high edges
+    high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
+
+    if len(high_edges) != 0:
+        print("Not all flats have outlets")
+
+    # Initialize FlatHeight array
+    flat_height = np.zeros(label, dtype=np.int32)
+
+    # Compute gradient away from higher terrain
+    away_from_higher(labels, flat_mask, flow_dirs, high_edges, flat_height)
+
+    # Compute gradient towards lower terrain
+    towards_lower(labels, flat_mask, flow_dirs, low_edges, flat_height)
+
+    return flat_mask, labels

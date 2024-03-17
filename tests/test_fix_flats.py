@@ -1,6 +1,12 @@
 import pytest
 import numpy as np
-from overflow.fix_flats import flat_edges, label_flats, away_from_higher, towards_lower
+from overflow.fix_flats import (
+    flat_edges,
+    label_flats,
+    away_from_higher,
+    towards_lower,
+    resolve_flats,
+)
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_EAST,
@@ -171,6 +177,27 @@ def fixture_expected_flat_labels():
     )
 
 
+@pytest.fixture(name="expected_final_flat_mask")
+def fixture_expected_final_flat_mask():
+    """Create the expected final flat mask for the test dem.
+
+    Returns:
+        np.ndarray: A 2D array containing the expected final flat mask
+    """
+    return np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 12, 12, 12, 12, 12, 0],
+            [0, 10, 9, 9, 9, 10, 0],
+            [0, 8, 7, 6, 7, 8, 0],
+            [0, 6, 5, 5, 5, 8, 0],
+            [0, 2, 2, 2, 6, 8, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+        ],
+        np.uint32,
+    )
+
+
 def test_flat_edges(dem, fdr, expected_high_edges, expected_low_edges):
     """Test the flat_edges function.
 
@@ -266,3 +293,15 @@ def test_towards_lower(fdr, expected_low_edges, expected_flat_labels):
         np.int32,
     )
     assert np.array_equal(flat_mask, expected_flat_mask)
+
+
+def test_resolve_flats(dem, fdr, expected_final_flat_mask, expected_flat_labels):
+    """Test the resolve_flats function.
+
+    Args:
+        dem (np.ndarray): A dem with a flat that drains
+        fdr (np.ndarray): A flow direction raster
+    """
+    flat_mask, labels = resolve_flats(dem, fdr)
+    assert np.array_equal(flat_mask, expected_final_flat_mask)
+    assert np.array_equal(labels, expected_flat_labels)
