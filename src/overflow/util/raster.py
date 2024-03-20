@@ -2,8 +2,9 @@ from typing import Iterator
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
-from numba import int64, float32
+from numba import int64, float32, njit
 from numba.experimental import jitclass
+from overflow.constants import NEIGHBOR_OFFSETS
 
 gdal.UseExceptions()
 
@@ -232,3 +233,39 @@ class GridCell:
 
     def __eq__(self, other):
         return self.cost == other.cost
+
+
+@njit
+def neighbor_generator(row, col, n_row, n_col):
+    """
+    A generator function that yields the coordinates of the neighbors of a given cell in a 2D grid.
+
+    The function takes as input the coordinates of a cell (row, col) and the dimensions of the grid (n_row, n_col).
+    It generates the coordinates of the 8 neighboring cells (top, bottom, left, right, and the 4 diagonals)
+    if they are within the grid boundaries.
+
+    Parameters:
+    row (int): The row index of the cell.
+    col (int): The column index of the cell.
+    n_row (int): The total number of rows in the grid.
+    n_col (int): The total number of columns in the grid.
+
+    Yields:
+    tuple: A tuple containing the row and column indices of a neighboring cell.
+
+    Example:
+    >>> list(neighbor_generator(1, 1, 3, 3))
+    [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)]
+    """
+    for d_row, d_col in NEIGHBOR_OFFSETS:
+        neighbor_row = row + d_row
+        neighbor_col = col + d_col
+        not_in_bounds = (
+            neighbor_row < 0
+            or neighbor_row >= n_row
+            or neighbor_col < 0
+            or neighbor_col >= n_col
+        )
+        if not_in_bounds:
+            continue
+        yield neighbor_row, neighbor_col

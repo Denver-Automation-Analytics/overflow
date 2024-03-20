@@ -9,6 +9,7 @@ from .constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
 )
+from .util.raster import neighbor_generator
 
 
 @njit
@@ -35,18 +36,9 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     low_edges = []
 
     for row, col in np.ndindex(fdr.shape):
-        for d_row, d_col in NEIGHBOR_OFFSETS:
-            neighbor_row = row + d_row
-            neighbor_col = col + d_col
-            # Check if the neighbor is not within the bounds of the DEM
-            not_in_bounds = (
-                neighbor_row < 0
-                or neighbor_row >= fdr.shape[0]
-                or neighbor_col < 0
-                or neighbor_col >= fdr.shape[1]
-            )
-            if not_in_bounds:
-                continue
+        for neighbor_row, neighbor_col in neighbor_generator(
+            row, col, fdr.shape[0], fdr.shape[1]
+        ):
             # continue if the neighbor is nodata
             fdr_neighbor = fdr[neighbor_row, neighbor_col]
             if fdr_neighbor == FLOW_DIRECTION_NODATA:
@@ -160,16 +152,9 @@ def away_from_higher(
             continue
         flat_mask[row, col] = loops
         flat_height[labels[row, col] - 1] = loops
-        for d_row, d_col in NEIGHBOR_OFFSETS:
-            neighbor_row = row + d_row
-            neighbor_col = col + d_col
-            if (
-                neighbor_row < 0
-                or neighbor_row >= labels.shape[0]
-                or neighbor_col < 0
-                or neighbor_col >= labels.shape[1]
-            ):
-                continue
+        for neighbor_row, neighbor_col in neighbor_generator(
+            row, col, fdr.shape[0], fdr.shape[1]
+        ):
             if (
                 labels[neighbor_row, neighbor_col] == labels[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
@@ -227,16 +212,9 @@ def towards_lower(
             flat_mask[row, col] += flat_height[labels[row, col] - 1] + 2 * loops
         else:
             flat_mask[row, col] = 2 * loops
-        for d_row, d_col in NEIGHBOR_OFFSETS:
-            neighbor_row = row + d_row
-            neighbor_col = col + d_col
-            if (
-                neighbor_row < 0
-                or neighbor_row >= labels.shape[0]
-                or neighbor_col < 0
-                or neighbor_col >= labels.shape[1]
-            ):
-                continue
+        for neighbor_row, neighbor_col in neighbor_generator(
+            row, col, fdr.shape[0], fdr.shape[1]
+        ):
             if (
                 labels[neighbor_row, neighbor_col] == labels[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
