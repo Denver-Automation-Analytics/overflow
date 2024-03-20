@@ -70,7 +70,6 @@ def test_breach_cingle_cell_pits_in_chunk():
 
 
 def test_breach_single_cell_pits(raster_file_path):
-
     expected = np.array(
         [
             [100, 90, 90, 97, 90],

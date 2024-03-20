@@ -205,3 +205,36 @@ def raster_chunker(
             )
             chunk.read(band)
             yield chunk
+
+
+def read_tile(
+    band: gdal.Band,
+    chunk_size: int,
+    chunk_row: int,
+    chunk_col: int,
+    chunk_buffer_size: int = 0,
+) -> RasterChunk:
+    chunk = RasterChunk(
+        chunk_row,
+        chunk_col,
+        chunk_size,
+        chunk_buffer_size,
+    )
+    chunk.read(band)
+    return chunk
+
+
+def write_tile(
+    band: gdal.Band,
+    chunk_size: int,
+    chunk_row: int,
+    chunk_col: int,
+    chunk_buffer_size: int = 0,
+) -> None:
+    chunk = RasterChunk(
+        chunk_row,
+        chunk_col,
+        chunk_size,
+        chunk_buffer_size,
+    )
+    chunk.write(band)
