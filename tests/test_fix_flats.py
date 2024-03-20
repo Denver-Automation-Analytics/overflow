@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+from osgeo import gdal
 from overflow.fix_flats import (
     flat_edges,
     label_flats,
@@ -7,9 +8,11 @@ from overflow.fix_flats import (
     towards_lower,
     resolve_flats,
     d8_masked_flow_dirs,
+    fix_flats,
 )
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
+    FLOW_DIRECTION_NODATA,
     FLOW_DIRECTION_EAST,
     FLOW_DIRECTION_WEST,
     FLOW_DIRECTION_SOUTH_EAST,
@@ -199,6 +202,160 @@ def fixture_expected_final_flat_mask():
     )
 
 
+@pytest.fixture(name="dem_zhou_2022")
+def fixture_dem_zhou_2022():
+    """DEM from the worked example in Zhou et al. 2022.
+
+    Returns:
+        np.ndarray: A 2D array DEM
+    """
+    return np.array(
+        [
+            [5, 4, 4, 5, 9, 7, 2, 4],
+            [9, 3, 3, 3, 3, 3, 3, 7],
+            [7, 3, 3, 3, 3, 3, 3, 5],
+            [8, 3, 3, 3, 3, 3, 3, 6],
+            [9, 3, 3, 3, 3, 3, 3, 2],
+            [6, 3, 3, 3, 3, 3, 3, 6],
+            [5, 3, 3, 3, 3, 3, 3, 5],
+            [1, 8, 9, 5, 6, 6, 7, 4],
+        ],
+        np.uint32,
+    )
+
+
+@pytest.fixture(name="dem_zhou_2022_filepath")
+def fixture_dem_zhou_2022_filepath(dem_zhou_2022):
+    """DEM from the worked example in Zhou et al. 2022.
+
+    Yeilds:
+        str: A path to a DEM file
+    """
+    dem_path = "/vsimem/dem_zhou_2022.tif"
+    driver = gdal.GetDriverByName("GTiff")
+    rows, cols = dem_zhou_2022.shape
+    dataset = driver.Create(dem_path, cols, rows, 1, gdal.GDT_Float32)
+    # set nodata value
+    dataset.GetRasterBand(1).SetNoDataValue(-9999)
+    dataset.GetRasterBand(1).WriteArray(dem_zhou_2022)
+    dataset = None
+    yield dem_path
+    gdal.Unlink(dem_path)
+
+
+@pytest.fixture(name="fdr_zhou_2022")
+def fixture_fdr_zhou_2022():
+    """FDR from the worked example in Zhou et al. 2022.
+
+    Returns:
+        np.ndarray: A 2D array DEM
+    """
+    return np.array(
+        [
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_EAST,
+            ],
+        ],
+        np.uint32,
+    )
+
+
+@pytest.fixture(name="fdr_zhou_2022_filepath")
+def fixture_fdr_zhou_2022_filepath(fdr_zhou_2022):
+    """FDR from the worked example in Zhou et al. 2022.
+
+    Yeilds:
+        str: A path to a FDR file
+    """
+    fdr_path = "/vsimem/fdr_zhou_2022.tif"
+    driver = gdal.GetDriverByName("GTiff")
+    rows, cols = fdr_zhou_2022.shape
+    dataset = driver.Create(fdr_path, cols, rows, 1, gdal.GDT_Byte)
+    # set nodata value
+    dataset.GetRasterBand(1).SetNoDataValue(FLOW_DIRECTION_NODATA)
+    dataset.GetRasterBand(1).WriteArray(fdr_zhou_2022)
+    dataset = None
+    yield fdr_path
+    gdal.Unlink(fdr_path)
+
+
 def test_flat_edges(dem, fdr, expected_high_edges, expected_low_edges):
     """Test the flat_edges function.
 
@@ -371,3 +528,7 @@ def test_d8_masked_flow_dirs(fdr, expected_final_flat_mask, expected_flat_labels
         dtype=np.uint8,
     )
     assert np.array_equal(test_fdr, expected_fdr)
+
+
+def test_fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath):
+    fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath)

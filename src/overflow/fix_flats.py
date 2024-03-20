@@ -1,6 +1,8 @@
 import math
 import numpy as np
 from numba import njit
+from .util.raster import raster_chunker
+from osgeo import gdal
 from .constants import (
     NEIGHBOR_OFFSETS,
     FLOW_DIRECTION_NODATA,
@@ -359,3 +361,32 @@ def d8_masked_flow_dirs(
                 min_slope = slope
                 nmin = FLOW_DIRECTIONS[i]
         fdr[row, col] = nmin
+
+
+def fix_flats(dem_filepath: str, fdr_filepath: str):
+    dem_ds = gdal.Open(dem_filepath)
+    dem_band = dem_ds.GetRasterBand(1)
+    fdr_ds = gdal.Open(fdr_filepath)
+    fdr_band = fdr_ds.GetRasterBand(1)
+    dem_tiles = []
+    fdr_tiles = []
+    # here we use a 1 cell buffer so that there
+    # are no uncertain edges, only low and high edges
+    for dem_tile in raster_chunker(dem_band, 4, 1):
+        dem_tiles.append(dem_tile.data)
+    for fdr_tile in raster_chunker(fdr_band, 4, 1):
+        fdr_tiles.append(fdr_tile.data)
+    for dem_tile, fdr_tile in zip(dem_tiles, fdr_tiles):
+        high_edges, low_edges = flat_edges(dem_tile, fdr_tile)
+        # remove any edges with row col outside the unbuffered region
+        high_edges = [
+            (row, col)
+            for row, col in high_edges
+            if 0 < row < dem_tile.shape[0] - 1 and 0 < col < dem_tile.shape[1] - 1
+        ]
+        low_edges = [
+            (row, col)
+            for row, col in low_edges
+            if 0 < row < dem_tile.shape[0] - 1 and 0 < col < dem_tile.shape[1] - 1
+        ]
+        pass
