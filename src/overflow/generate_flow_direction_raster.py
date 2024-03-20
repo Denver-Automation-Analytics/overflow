@@ -1,7 +1,8 @@
 import math
 import numpy as np
 from numba import njit, prange
-from osgeo import gdal
+
+from .setup_bands import setup_bands
 from .util.raster import raster_chunker
 
 
@@ -65,31 +66,16 @@ def flow_direction_from_chunks(input_path, output_path, chunk_size=1000):
         output_path (_type_): _description_
         chunk_size (int, optional): _description_. Defaults to 1000.
     """
-    input_raster = gdal.Open(input_path)
-    cell_size = 1
+    with setup_bands(input_path, output_path) as bands:
+        input_band, output_band, nodata_value = bands
+        cell_size = 1
 
-    projection = input_raster.GetProjection()
-    transform = input_raster.GetGeoTransform()
-
-    band = input_raster.GetRasterBand(1)
-    nodata_value = band.GetNoDataValue()
-    driver = gdal.GetDriverByName("GTiff")
-    dataset = driver.Create(
-        output_path,
-        input_raster.RasterYSize,
-        input_raster.RasterXSize,
-        1,
-        gdal.GDT_Float32,
-    )
-
-    dataset.SetProjection(projection)
-    dataset.SetGeoTransform(transform)
-    output_band = dataset.GetRasterBand(1)
-
-    for chunk in raster_chunker(band, chunk_size=chunk_size, chunk_buffer_size=2):
-        result = generate_flow_direction_raster(chunk.data, cell_size, nodata_value)
-        chunk.from_numpy(result)
-        chunk.write(output_band)
+        for chunk in raster_chunker(
+            input_band, chunk_size=chunk_size, chunk_buffer_size=2
+        ):
+            result = generate_flow_direction_raster(chunk.data, cell_size, nodata_value)
+            chunk.from_numpy(result)
+            chunk.write(output_band)
 
 
 flow_direction_from_chunks(
