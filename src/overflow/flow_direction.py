@@ -109,8 +109,8 @@ def flow_direction(input_path, output_path, chunk_size=4000):
     driver = gdal.GetDriverByName("GTiff")
     dataset = driver.Create(
         output_path,
-        input_raster.RasterYSize,
         input_raster.RasterXSize,
+        input_raster.RasterYSize,
         1,
         gdal.GDT_Byte,
     )

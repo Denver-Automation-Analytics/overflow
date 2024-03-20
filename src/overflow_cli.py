@@ -134,3 +134,10 @@ def breach_paths_least_cost_cli(
         )
         # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
         raise click.Abort()
+
+
+if __name__ == "__main__":
+    # run the function
+    # pylint does not understand click decorators
+    # pylint: disable=no-value-for-parameter
+    main()
