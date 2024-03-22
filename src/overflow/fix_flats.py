@@ -10,6 +10,7 @@ from .constants import (
     FLOW_DIRECTIONS,
 )
 from .util.raster import neighbor_generator
+from .util.numba_datastructures import ResizableFIFOQueue
 
 
 @njit
@@ -139,14 +140,19 @@ def away_from_higher(
         high_edges (np.ndarray): The high edge cells of the DEM. In no particular order. FIFO queue.
         flat_height (np.array): The flat height array, size of the number of flats
     """
+    high_edges = ResizableFIFOQueue(high_edges)
     loops = 1
     marker = (-1, -1)
-    high_edges.append(marker)
+    high_edges.push(marker)
+    iters = 0
+    max_size = 0
     while len(high_edges) > 1:
-        row, col = high_edges.pop(0)
+        max_size = max(max_size, len(high_edges))
+        row, col = high_edges.pop()
+        iters += 1
         if row == marker[0] and col == marker[1]:
             loops += 1
-            high_edges.append(marker)
+            high_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -159,7 +165,7 @@ def away_from_higher(
                 labels[neighbor_row, neighbor_col] == labels[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
-                high_edges.append((neighbor_row, neighbor_col))
+                high_edges.push((neighbor_row, neighbor_col))
 
 
 @njit
@@ -199,12 +205,13 @@ def towards_lower(
     flat_mask *= -1
     loops = 1
     marker = (-1, -1)
-    low_edges.append(marker)
+    low_edges = ResizableFIFOQueue(low_edges)
+    low_edges.push(marker)
     while len(low_edges) > 1:
-        row, col = low_edges.pop(0)
+        row, col = low_edges.pop()
         if row == marker[0] and col == marker[1]:
             loops += 1
-            low_edges.append(marker)
+            low_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -219,10 +226,9 @@ def towards_lower(
                 labels[neighbor_row, neighbor_col] == labels[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
-                low_edges.append((neighbor_row, neighbor_col))
+                low_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
 def resolve_flats(
     dem: np.ndarray, flow_dirs: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -254,8 +260,8 @@ def resolve_flats(
     high_edges, low_edges = flat_edges(dem, flow_dirs)
 
     # Check if there are undrainable flats
-    if not low_edges:
-        if high_edges:
+    if len(low_edges) == 0:
+        if len(high_edges) != 0:
             print("There were undrainable flats")
         else:
             print("There were no flats")
@@ -268,11 +274,13 @@ def resolve_flats(
             label_flats(dem, labels, label, row, col)
             label += 1
 
-    # Remove unlabeled cells from high edges
-    high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
-
-    if len(high_edges) != 0:
-        print("Not all flats have outlets")
+    # # Remove unlabeled cells from high edges
+    # high_edge_count = len(high_edges)
+    # high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
+    #
+    # if high_edge_count != len(high_edges):
+    #     print("Not all flats have outlets")
+    #     return flat_mask, labels
 
     # Initialize FlatHeight array
     flat_height = np.zeros(label, dtype=np.int32)
