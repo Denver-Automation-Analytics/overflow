@@ -530,28 +530,5 @@ def test_d8_masked_flow_dirs(fdr, expected_final_flat_mask, expected_flat_labels
     assert np.array_equal(test_fdr, expected_fdr)
 
 
-import time
-
-
 def test_fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath):
-    assert True
-    # dem = "data/out/filled_dem.tif"
-    # fdr = "data/out/FDR_5070.tif"
-    # out_fdr = "data/out/FDR_5070_fixed.tif"
-    # # get numpy arrays
-    # dem_ds = gdal.Open(dem)
-    # fdr_ds = gdal.Open(fdr)
-    # dem_arr = dem_ds.GetRasterBand(1).ReadAsArray()
-    # fdr_arr = fdr_ds.GetRasterBand(1).ReadAsArray()
-    # start_time = time.time()
-    # flat_mask, labels = resolve_flats(dem_arr, fdr_arr)
-    # d8_masked_flow_dirs(flat_mask, fdr_arr, labels)
-    # seconds = time.time() - start_time
-    # driver = gdal.GetDriverByName("GTiff")
-    # rows, cols = fdr_arr.shape
-    # dataset = driver.Create(out_fdr, cols, rows, 1, gdal.GDT_Byte)
-    # # set nodata value
-    # dataset.GetRasterBand(1).SetNoDataValue(FLOW_DIRECTION_NODATA)
-    # dataset.GetRasterBand(1).WriteArray(fdr_arr)
-    # dataset = None
-    # print(f"Time: {seconds}")
+    fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath, chunk_size=4)

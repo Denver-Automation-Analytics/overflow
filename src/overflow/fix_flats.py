@@ -8,6 +8,8 @@ from .constants import (
     FLOW_DIRECTION_NODATA,
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
+    DEFAULT_CHUNK_SIZE,
+    TERRAIN_ID,
 )
 from .util.raster import neighbor_generator
 from .util.numba_datastructures import ResizableFIFOQueue
@@ -92,10 +94,10 @@ def label_flats(
         flat_col (int): The initial column of the flat cell
     """
     # create FIFO queue for to_be_filled
-    to_be_filled = [(flat_row, flat_col)]
+    to_be_filled = ResizableFIFOQueue([(flat_row, flat_col)])
     elev = dem[flat_row, flat_col]
     while to_be_filled:
-        row, col = to_be_filled.pop(0)
+        row, col = to_be_filled.pop()
         not_in_bounds = row < 0 or row >= dem.shape[0] or col < 0 or col >= dem.shape[1]
         if not_in_bounds:
             continue
@@ -108,10 +110,9 @@ def label_flats(
         for d_row, d_col in NEIGHBOR_OFFSETS:
             neighbor_row = row + d_row
             neighbor_col = col + d_col
-            to_be_filled.append((neighbor_row, neighbor_col))
+            to_be_filled.push((neighbor_row, neighbor_col))
 
 
-@njit
 def away_from_higher(
     labels: np.ndarray,
     flat_mask: np.ndarray,
@@ -140,16 +141,14 @@ def away_from_higher(
         high_edges (np.ndarray): The high edge cells of the DEM. In no particular order. FIFO queue.
         flat_height (np.array): The flat height array, size of the number of flats
     """
+    if len(high_edges) == 0:
+        return
     high_edges = ResizableFIFOQueue(high_edges)
     loops = 1
     marker = (-1, -1)
     high_edges.push(marker)
-    iters = 0
-    max_size = 0
     while len(high_edges) > 1:
-        max_size = max(max_size, len(high_edges))
         row, col = high_edges.pop()
-        iters += 1
         if row == marker[0] and col == marker[1]:
             loops += 1
             high_edges.push(marker)
@@ -274,13 +273,12 @@ def resolve_flats(
             label_flats(dem, labels, label, row, col)
             label += 1
 
-    # # Remove unlabeled cells from high edges
-    # high_edge_count = len(high_edges)
-    # high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
-    #
-    # if high_edge_count != len(high_edges):
-    #     print("Not all flats have outlets")
-    #     return flat_mask, labels
+    # Remove unlabeled cells from high edges
+    high_edge_count = len(high_edges)
+    high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
+    if high_edge_count != len(high_edges):
+        print("Not all flats have outlets")
+        return flat_mask, labels
 
     # Initialize FlatHeight array
     flat_height = np.zeros(label, dtype=np.int32)
@@ -349,30 +347,507 @@ def d8_masked_flow_dirs(
         fdr[row, col] = nmin
 
 
-def fix_flats(dem_filepath: str, fdr_filepath: str):
+def resolve_flats_tile(
+    dem: np.ndarray, flow_dirs: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Algorithm 1 ResolveFlats modified for use in the tile-based processing pipeline."""
+
+    # Find flat edges, this will not result in any uncertain edges
+    # because we are processing with a 1 cell buffer
+    high_edges, low_edges = flat_edges(dem, flow_dirs)
+
+    # Remove the buffer region from the edges, dem, and flow_dirs
+    # this is necessary because the buffer region is not part of the tile
+    # and we don't want to process it since it was only used to define the uncertain edges
+    low_edges = [
+        (row - 1, col - 1)
+        for row, col in low_edges
+        if row > 0 and col > 0 and row < dem.shape[0] - 1 and col < dem.shape[1] - 1
+    ]
+    high_edges = [
+        (row - 1, col - 1)
+        for row, col in high_edges
+        if row > 0 and col > 0 and row < dem.shape[0] - 1 and col < dem.shape[1] - 1
+    ]
+    # remove buffer region from dem and flow_dirs
+    dem = dem[1:-1, 1:-1]
+    flow_dirs = flow_dirs[1:-1, 1:-1]
+
+    # Initialize distance and labels arrays
+    dist_to_higher = np.zeros_like(dem, dtype=np.int32)
+    dist_to_lower = np.zeros_like(dem, dtype=np.int32)
+    labels = np.zeros_like(dem, dtype=np.int32)
+
+    label = 1
+    # Label flats from low edges and high edges
+    for row, col in low_edges + high_edges:
+        if labels[row, col] == 0:
+            label_flats(dem, labels, label, row, col)
+            label += 1
+
+    # Initialize max_dist arrays
+    max_dist_to_higher = np.zeros(label, dtype=np.int32)
+    max_dist_to_lower = np.zeros(label, dtype=np.int32)
+
+    # Compute gradient away from higher terrain
+    away_from_higher(labels, dist_to_higher, flow_dirs, high_edges, max_dist_to_higher)
+    # Compute gradient towards lower terrain (same logic as away_from_higher so we reuse the function)
+    away_from_higher(labels, dist_to_lower, flow_dirs, low_edges, max_dist_to_lower)
+
+    return dist_to_higher, dist_to_lower, labels
+
+
+def get_perimeter_cells(
+    array: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Get the perimeter cells of the array.
+
+    Args:
+        array (np.ndarray): The array to get the perimeter cells of
+
+    Returns:
+        np.ndarray, np.ndarray, np.ndarray, np.ndarray: The perimeter cells of the array (top, bottom, left, right)
+    """
+
+    top_edge = np.ascontiguousarray(array[0, :])  # top row
+    bottom_edge = np.ascontiguousarray(array[-1, :])  # bottom row
+    left_edge = np.ascontiguousarray(
+        array[1:-1, 0]
+    )  # left column (excluding top and bottom)
+    right_edge = np.ascontiguousarray(
+        array[1:-1, -1]
+    )  # right column (excluding top and bottom)
+    return top_edge, bottom_edge, left_edge, right_edge
+
+
+def get_index_row_col(
+    index: int, num_top_labels: int, num_left_labels: int
+) -> tuple[int, int]:
+    row, col = -1, -1
+    num_perimeter_cells = 2 * num_top_labels + 2 * num_left_labels
+    # if i in top_edge, set row to 0
+    if index < num_top_labels:
+        row = 0
+    # if i in bottom_edge, set row to len(left_edge) + 1
+    if index >= num_top_labels and index < num_top_labels + num_top_labels:
+        row = num_left_labels + 1
+    # if i in left_edge, set col to 0
+    if (
+        index == 0
+        or index == num_top_labels
+        or (
+            index >= num_top_labels + num_top_labels
+            and index < num_top_labels + num_top_labels + num_left_labels
+        )
+    ):
+        col = 0
+    # if i in right_edge, set col to num_top_labels - 1
+    if (
+        index == num_top_labels - 1
+        or index == num_top_labels + num_top_labels - 1
+        or (
+            index >= num_top_labels + num_top_labels + num_left_labels
+            and index < num_perimeter_cells
+        )
+    ):
+        col = num_top_labels - 1
+    return row, col
+
+
+def construct_local_edge_graph(
+    labels_perimeter: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    distance_perimeter: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tile_index: int,
+) -> dict:
+    """TODO"""
+    top_labels, bottom_labels, left_labels, right_labels = labels_perimeter
+    top_distance, bottom_distance, left_distance, right_distance = distance_perimeter
+
+    # concatenate all the labels and distances
+    labels_perimeter = np.concatenate(
+        (top_labels, bottom_labels, left_labels, right_labels)
+    )
+    distance_perimeter = np.concatenate(
+        (top_distance, bottom_distance, left_distance, right_distance)
+    )
+
+    # connect every cell to every other cell of the same label
+    # to make a fully connected graph
+    # TODO, optimize this. We only need to connect some of these cells
+    index_offset = tile_index * len(labels_perimeter)
+    graph = [[] for _ in range(len(labels_perimeter))]
+    for i, label in enumerate(labels_perimeter):
+        if label == 0:
+            continue
+        row_i, col_i = get_index_row_col(i, len(top_labels), len(left_labels))
+
+        for j, other_label in enumerate(labels_perimeter):
+            if other_label == label and i != j:
+                row_j, col_j = get_index_row_col(j, len(top_labels), len(left_labels))
+                distance = max(abs(row_i - row_j), abs(col_i - col_j))
+                graph[i].append((j + index_offset, distance))
+                graph[j].append((i + index_offset, distance))
+    # connect each cell to the high/low terrain node
+    terrain_edges = []
+    for i, distance in enumerate(distance_perimeter):
+        if labels_perimeter[i] == 0 or distance == 0:
+            continue
+        # graph[i].append((TERRAIN_ID, distance))
+        terrain_edges.append((i + index_offset, distance))
+
+    return graph, terrain_edges
+
+
+def handle_edge(
+    global_labels: list,
+    edge_a_start_index,
+    edge_b_start_index,
+    edge_length,
+    global_graph,
+):
+    for k in range(edge_length):
+        if global_labels[edge_a_start_index + k] != 0:
+            if k == 0:
+                if global_labels[edge_b_start_index] != 0:
+                    global_graph[edge_a_start_index + k].append((edge_b_start_index, 1))
+                    global_graph[edge_b_start_index].append((edge_a_start_index + k, 1))
+                if global_labels[edge_b_start_index + 1] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + 1, 1)
+                    )
+                    global_graph[edge_b_start_index + 1].append(
+                        (edge_a_start_index + k, 1)
+                    )
+            if k == edge_length - 1:
+                if global_labels[edge_b_start_index + edge_length - 1] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + edge_length - 1, 1)
+                    )
+                    global_graph[edge_b_start_index + edge_length - 1].append(
+                        (edge_a_start_index + k, 1)
+                    )
+                if global_labels[edge_b_start_index + edge_length - 2] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + edge_length - 2, 1)
+                    )
+                    global_graph[edge_b_start_index + edge_length - 2].append(
+                        (edge_a_start_index + k, 1)
+                    )
+            else:
+                if global_labels[edge_b_start_index + k] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + k, 1)
+                    )
+                    global_graph[edge_b_start_index + k].append(
+                        (edge_a_start_index + k, 1)
+                    )
+                if global_labels[edge_b_start_index + k + 1] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + k + 1, 1)
+                    )
+                    global_graph[edge_b_start_index + k + 1].append(
+                        (edge_a_start_index + k, 1)
+                    )
+                if global_labels[edge_b_start_index + k - 1] != 0:
+                    global_graph[edge_a_start_index + k].append(
+                        (edge_b_start_index + k - 1, 1)
+                    )
+                    global_graph[edge_b_start_index + k - 1].append(
+                        (edge_a_start_index + k, 1)
+                    )
+
+
+def handle_corner(
+    global_labels: list,
+    corner_a_index,
+    corner_b_index,
+    corner_c_index,
+    corner_d_index,
+    corner_e_index,
+    corner_f_index,
+    corner_g_index,
+    corner_h_index,
+    corner_i_index,
+    corner_j_index,
+    corner_k_index,
+    corner_l_index,
+    global_graph,
+):
+    #   a  b
+    # c d  e f
+    #
+    # g h  i j
+    #   k  l
+    #
+    # Define the connections for each corner
+    connections = {
+        corner_d_index: [
+            corner_b_index,
+            corner_e_index,
+            corner_i_index,
+            corner_h_index,
+            corner_g_index,
+        ],
+        corner_e_index: [
+            corner_a_index,
+            corner_d_index,
+            corner_h_index,
+            corner_i_index,
+            corner_j_index,
+        ],
+        corner_h_index: [
+            corner_c_index,
+            corner_d_index,
+            corner_e_index,
+            corner_i_index,
+            corner_l_index,
+        ],
+        corner_i_index: [
+            corner_f_index,
+            corner_e_index,
+            corner_d_index,
+            corner_h_index,
+            corner_k_index,
+        ],
+        corner_a_index: [corner_e_index],
+        corner_b_index: [corner_d_index],
+        corner_f_index: [corner_i_index],
+        corner_j_index: [corner_e_index],
+        corner_k_index: [corner_i_index],
+        corner_l_index: [corner_h_index],
+        corner_g_index: [corner_d_index],
+        corner_c_index: [corner_h_index],
+    }
+
+    # Iterate over the connections and create them
+    for corner, connects in connections.items():
+        if global_labels[corner] != 0:
+            for connect in connects:
+                if global_labels[connect] != 0:
+                    global_graph[corner].append((connect, 1))
+
+
+import heapq
+
+
+def fix_flats(
+    dem_filepath: str, fdr_filepath: str, chunk_size: int = DEFAULT_CHUNK_SIZE
+):
     dem_ds = gdal.Open(dem_filepath)
     dem_band = dem_ds.GetRasterBand(1)
     fdr_ds = gdal.Open(fdr_filepath)
     fdr_band = fdr_ds.GetRasterBand(1)
+
+    num_rows = dem_band.YSize
+    num_cols = dem_band.XSize
+    num_tile_rows = math.ceil(num_rows / chunk_size)
+    num_tile_cols = math.ceil(num_cols / chunk_size)
+
     dem_tiles = []
     fdr_tiles = []
     # here we use a 1 cell buffer so that there
     # are no uncertain edges, only low and high edges
-    for dem_tile in raster_chunker(dem_band, 4, 1):
+    for dem_tile in raster_chunker(dem_band, chunk_size, 1):
         dem_tiles.append(dem_tile.data)
-    for fdr_tile in raster_chunker(fdr_band, 4, 1):
+    for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
         fdr_tiles.append(fdr_tile.data)
+    tile_index = 0
+    global_high_graph = []
+    global_low_graph = []
+    global_high_terrain_edges = []
+    global_low_terrain_edges = []
+    global_labels = []
     for dem_tile, fdr_tile in zip(dem_tiles, fdr_tiles):
-        high_edges, low_edges = flat_edges(dem_tile, fdr_tile)
-        # remove any edges with row col outside the unbuffered region
-        high_edges = [
-            (row, col)
-            for row, col in high_edges
-            if 0 < row < dem_tile.shape[0] - 1 and 0 < col < dem_tile.shape[1] - 1
-        ]
-        low_edges = [
-            (row, col)
-            for row, col in low_edges
-            if 0 < row < dem_tile.shape[0] - 1 and 0 < col < dem_tile.shape[1] - 1
-        ]
-        pass
+        dist_to_higher, dist_to_lower, labels = resolve_flats_tile(dem_tile, fdr_tile)
+        # remove buffer region from dem and flow_dirs
+        dem_tile = dem_tile[1:-1, 1:-1]
+        fdr_tile = fdr_tile[1:-1, 1:-1]
+        # construct high graph and low graph
+        dem_perimeter = get_perimeter_cells(dem_tile)
+        labels_perimeter = get_perimeter_cells(labels)
+        dist_to_higher_perimeter = get_perimeter_cells(dist_to_higher)
+        dist_to_lower_perimeter = get_perimeter_cells(dist_to_lower)
+        high_graph, high_terrain_edges = construct_local_edge_graph(
+            labels_perimeter, dist_to_higher_perimeter, tile_index
+        )
+        global_high_graph += high_graph
+        global_high_terrain_edges += high_terrain_edges
+        low_graph, low_terrain_edges = construct_local_edge_graph(
+            labels_perimeter, dist_to_lower_perimeter, tile_index
+        )
+        global_low_graph += low_graph
+        global_low_terrain_edges += low_terrain_edges
+        global_labels = np.concatenate(
+            (
+                global_labels,
+                labels_perimeter[0],
+                labels_perimeter[1],
+                labels_perimeter[2],
+                labels_perimeter[3],
+            )
+        )
+        tile_index += 1
+
+    # for all 2x2 tiles, connect edges and corners
+    # + - - + - - +
+    # |  A  |  B  |
+    # + - - * - - +
+    # |  C  |  D  |
+    # + - - + - - +
+    for i in range(num_tile_rows - 1):
+        for j in range(num_tile_cols - 1):
+            tile_index = i * num_tile_cols + j
+            # connect A-B edge (not including corners)
+            perimeter_cells_per_tile = 2 * (chunk_size - 2) + 2 * chunk_size
+            tile_a_index_offset = tile_index * perimeter_cells_per_tile
+            right_edge_start_index = (
+                tile_a_index_offset + 2 * chunk_size + (chunk_size - 2)
+            )
+            tile_b_index_offset = (tile_index + 1) * perimeter_cells_per_tile
+            left_edge_start_index = tile_b_index_offset + 2 * chunk_size
+            edge_length = chunk_size - 2
+            handle_edge(
+                global_labels,
+                right_edge_start_index,
+                left_edge_start_index,
+                edge_length,
+                global_high_graph,
+            )
+            handle_edge(
+                global_labels,
+                right_edge_start_index,
+                left_edge_start_index,
+                edge_length,
+                global_low_graph,
+            )
+            # connect A-C edge (not including corners)
+            bottom_edge_start_index = tile_a_index_offset + chunk_size + 1
+            tile_c_index_offset = (
+                tile_index + num_tile_cols
+            ) * perimeter_cells_per_tile
+            top_edge_start_index = tile_c_index_offset + 1
+            handle_edge(
+                global_labels,
+                bottom_edge_start_index,
+                top_edge_start_index,
+                edge_length,
+                global_high_graph,
+            )
+            handle_edge(
+                global_labels,
+                bottom_edge_start_index,
+                top_edge_start_index,
+                edge_length,
+                global_low_graph,
+            )
+            # connect D-B edge (not including corners)
+            tile_d_index_offset = (
+                tile_index + num_tile_cols + 1
+            ) * perimeter_cells_per_tile
+            top_edge_start_index = tile_d_index_offset + 1
+            bottom_edge_start_index = tile_b_index_offset + chunk_size + 1
+            handle_edge(
+                global_labels,
+                top_edge_start_index,
+                bottom_edge_start_index,
+                edge_length,
+                global_high_graph,
+            )
+            handle_edge(
+                global_labels,
+                top_edge_start_index,
+                bottom_edge_start_index,
+                edge_length,
+                global_low_graph,
+            )
+            # connect D-C edge (not including corners)
+            right_edge_start_index = (
+                tile_c_index_offset + 2 * chunk_size + (chunk_size - 2)
+            )
+            left_edge_start_index = tile_d_index_offset + 2 * chunk_size
+            handle_edge(
+                global_labels,
+                right_edge_start_index,
+                left_edge_start_index,
+                edge_length,
+                global_high_graph,
+            )
+            handle_edge(
+                global_labels,
+                right_edge_start_index,
+                left_edge_start_index,
+                edge_length,
+                global_low_graph,
+            )
+
+            # connect top left tile bottom right corner with top right tile top left corner
+            corner_a_index = (
+                tile_a_index_offset + 2 * chunk_size + 2 * (chunk_size - 2) - 1
+            )
+            corner_b_index = tile_b_index_offset + 2 * chunk_size + (chunk_size - 2) - 1
+            corner_c_index = tile_a_index_offset + 2 * chunk_size - 2
+            corner_d_index = tile_a_index_offset + 2 * chunk_size - 1
+            corner_e_index = tile_b_index_offset + chunk_size
+            corner_f_index = tile_b_index_offset + chunk_size + 1
+            corner_g_index = tile_c_index_offset + chunk_size - 2
+            corner_h_index = tile_c_index_offset + chunk_size - 1
+            corner_i_index = tile_d_index_offset
+            corner_j_index = tile_d_index_offset + 1
+            corner_k_index = tile_c_index_offset + 2 * chunk_size + (chunk_size - 2)
+            corner_l_index = tile_c_index_offset + 2 * chunk_size
+            handle_corner(
+                global_labels,
+                corner_a_index,
+                corner_b_index,
+                corner_c_index,
+                corner_d_index,
+                corner_e_index,
+                corner_f_index,
+                corner_g_index,
+                corner_h_index,
+                corner_i_index,
+                corner_j_index,
+                corner_k_index,
+                corner_l_index,
+                global_high_graph,
+            )
+            handle_corner(
+                global_labels,
+                corner_a_index,
+                corner_b_index,
+                corner_c_index,
+                corner_d_index,
+                corner_e_index,
+                corner_f_index,
+                corner_g_index,
+                corner_h_index,
+                corner_i_index,
+                corner_j_index,
+                corner_k_index,
+                corner_l_index,
+                global_low_graph,
+            )
+    min_dist_high = []
+    # using djikstra's algorithm, find the minimum distance to all cells on the perimeter
+    # from global_high_terrain_edges which is a single node connecting all edge cells to the high terrain node
+    # The result in min_dist_high will be the minimum distance to all cells in the high graph
+    # from the high terrain node
+    for i in range(len(global_high_graph)):
+        min_dist_high.append(float("inf"))
+    pq = []
+    # populate pq with the high terrain node and its neighbors
+    for neighbor, weight in global_high_terrain_edges:
+        if weight < min_dist_high[neighbor]:
+            min_dist_high[neighbor] = weight
+            heapq.heappush(pq, (weight, neighbor))
+    while pq:
+        dist, node = heapq.heappop(pq)
+        if dist > min_dist_high[node]:
+            continue
+        for neighbor, weight in global_high_graph[node]:
+            if dist + weight < min_dist_high[neighbor]:
+                min_dist_high[neighbor] = dist + weight
+                heapq.heappush(pq, (dist + weight, neighbor))
+
+    # update the flow directions
+    print("Updating flow directions")

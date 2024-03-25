@@ -57,3 +57,4 @@ FLOW_DIRECTIONS = np.array(
 FLOW_ACCUMULATION_NODATA = -9999
 FLOW_TERMINATES = (-1, -1)
 FLOW_EXTERNAL = (-2, -2)
+TERRAIN_ID = -1  # id of the high/low terrain node in fix flats global graph
