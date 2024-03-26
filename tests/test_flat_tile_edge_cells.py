@@ -98,11 +98,11 @@ def test_size(test_edge_cells):
     assert test_edge_cells.size() == 16
 
 
-def test_iterate_side(test_edge_cells):
-    """Test the iterate_side method."""
+def test_get_side(test_edge_cells):
+    """Test the get_side method."""
     # check that the sides are correct
     sides = [
-        list(test_edge_cells.iterate_side(side))
+        list(test_edge_cells.get_side(side))
         for side in [Side.TOP, Side.RIGHT, Side.BOTTOM, Side.LEFT]
     ]
     assert sides == [
