@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from numba import njit
-from .util.raster import raster_chunker
+from .util.raster import raster_chunker, RasterChunk
 from osgeo import gdal
 from .constants import (
     NEIGHBOR_OFFSETS,
@@ -13,6 +13,21 @@ from .constants import (
 )
 from .util.raster import neighbor_generator
 from .util.numba_datastructures import ResizableFIFOQueue
+from enum import Enum
+
+
+class Side(Enum):
+    TOP = 1
+    RIGHT = 2
+    BOTTOM = 3
+    LEFT = 4
+
+
+class Corner(Enum):
+    TOP_LEFT = 1
+    TOP_RIGHT = 2
+    BOTTOM_RIGHT = 3
+    BOTTOM_LEFT = 4
 
 
 @njit
@@ -397,29 +412,6 @@ def resolve_flats_tile(
     return dist_to_higher, dist_to_lower, labels
 
 
-def get_perimeter_cells(
-    array: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Get the perimeter cells of the array.
-
-    Args:
-        array (np.ndarray): The array to get the perimeter cells of
-
-    Returns:
-        np.ndarray, np.ndarray, np.ndarray, np.ndarray: The perimeter cells of the array (top, bottom, left, right)
-    """
-
-    top_edge = np.ascontiguousarray(array[0, :])  # top row
-    bottom_edge = np.ascontiguousarray(array[-1, :])  # bottom row
-    left_edge = np.ascontiguousarray(
-        array[1:-1, 0]
-    )  # left column (excluding top and bottom)
-    right_edge = np.ascontiguousarray(
-        array[1:-1, -1]
-    )  # right column (excluding top and bottom)
-    return top_edge, bottom_edge, left_edge, right_edge
-
-
 def get_index_row_col(
     index: int, num_top_labels: int, num_left_labels: int
 ) -> tuple[int, int]:
@@ -452,50 +444,6 @@ def get_index_row_col(
     ):
         col = num_top_labels - 1
     return row, col
-
-
-def construct_local_edge_graph(
-    labels_perimeter: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    distance_perimeter: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tile_index: int,
-) -> dict:
-    """TODO"""
-    top_labels, bottom_labels, left_labels, right_labels = labels_perimeter
-    top_distance, bottom_distance, left_distance, right_distance = distance_perimeter
-
-    # concatenate all the labels and distances
-    labels_perimeter = np.concatenate(
-        (top_labels, bottom_labels, left_labels, right_labels)
-    )
-    distance_perimeter = np.concatenate(
-        (top_distance, bottom_distance, left_distance, right_distance)
-    )
-
-    # connect every cell to every other cell of the same label
-    # to make a fully connected graph
-    # TODO, optimize this. We only need to connect some of these cells
-    index_offset = tile_index * len(labels_perimeter)
-    graph = [[] for _ in range(len(labels_perimeter))]
-    for i, label in enumerate(labels_perimeter):
-        if label == 0:
-            continue
-        row_i, col_i = get_index_row_col(i, len(top_labels), len(left_labels))
-
-        for j, other_label in enumerate(labels_perimeter):
-            if other_label == label and i != j:
-                row_j, col_j = get_index_row_col(j, len(top_labels), len(left_labels))
-                distance = max(abs(row_i - row_j), abs(col_i - col_j))
-                graph[i].append((j + index_offset, distance))
-                graph[j].append((i + index_offset, distance))
-    # connect each cell to the high/low terrain node
-    terrain_edges = []
-    for i, distance in enumerate(distance_perimeter):
-        if labels_perimeter[i] == 0 or distance == 0:
-            continue
-        # graph[i].append((TERRAIN_ID, distance))
-        terrain_edges.append((i + index_offset, distance))
-
-    return graph, terrain_edges
 
 
 def handle_edge(
@@ -630,6 +578,98 @@ def handle_corner(
 import heapq
 
 
+class TileEdgeCells:
+    def __init__(self, array):
+        (
+            self.top,
+            self.bottom,
+            self.left,
+            self.right,
+            self.top_left_corner,
+            self.top_right_corner,
+            self.bottom_left_corner,
+            self.bottom_right_corner,
+        ) = self._get_perimeter_cells(array)
+
+    def _get_perimeter_cells(
+        self,
+        array: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Get the perimeter cells of the array.
+
+        Args:
+            array (np.ndarray): The array to get the perimeter cells of
+
+        Returns:
+            np.ndarray, np.ndarray, np.ndarray, np.ndarray: The perimeter cells of the array (top, bottom, left, right)
+        """
+
+        top_edge = np.ascontiguousarray(array[0, 1:-1])  # top row (excluding corners)
+        bottom_edge = np.ascontiguousarray(
+            array[-1, 1:-1]
+        )  # bottom row (excluding corners)
+        left_edge = np.ascontiguousarray(
+            array[1:-1, 0]
+        )  # left column (excluding corners)
+        right_edge = np.ascontiguousarray(
+            array[1:-1, -1]
+        )  # right column (excluding corners)
+        top_left_corner = array[0, 0]
+        top_right_corner = array[0, -1]
+        bottom_left_corner = array[-1, 0]
+        bottom_right_corner = array[-1, -1]
+        return (
+            top_edge,
+            bottom_edge,
+            left_edge,
+            right_edge,
+            top_left_corner,
+            top_right_corner,
+            bottom_left_corner,
+            bottom_right_corner,
+        )
+
+
+class TileEdgeData:
+    def __init__(self, row, col, labels, to_higher, to_lower):
+        self.to_higher = TileEdgeCells(to_higher)
+        self.to_lower = TileEdgeCells(to_lower)
+        self.labels = TileEdgeCells(labels)
+        self.row = row
+        self.col = col
+        self.index_offset = # TODO, then use a map to producer to choose adjacent tiles when joining edges and corners
+
+
+def construct_local_edge_graph(
+    tile_data: TileEdgeData,
+) -> list:
+    # connect every cell to every other cell of the same label
+    # to make a fully connected graph
+    # TODO, optimize this. We only need to connect some of these cells
+    index_offset = tile_index * len(labels_perimeter)
+    graph = [[] for _ in range(len(labels_perimeter))]
+    for i, label in enumerate(labels_perimeter):
+        if label == 0:
+            continue
+        row_i, col_i = get_index_row_col(i, len(top_labels), len(left_labels))
+
+        for j, other_label in enumerate(labels_perimeter):
+            if other_label == label and i != j:
+                row_j, col_j = get_index_row_col(j, len(top_labels), len(left_labels))
+                distance = max(abs(row_i - row_j), abs(col_i - col_j))
+                graph[i].append((j + index_offset, distance))
+                graph[j].append((i + index_offset, distance))
+    # connect each cell to the high/low terrain node
+    terrain_edges = []
+    for i, distance in enumerate(distance_perimeter):
+        if labels_perimeter[i] == 0 or distance == 0:
+            continue
+        # graph[i].append((TERRAIN_ID, distance))
+        terrain_edges.append((i + index_offset, distance))
+
+    return graph, terrain_edges
+
+
 def fix_flats(
     dem_filepath: str, fdr_filepath: str, chunk_size: int = DEFAULT_CHUNK_SIZE
 ):
@@ -643,10 +683,22 @@ def fix_flats(
     num_tile_rows = math.ceil(num_rows / chunk_size)
     num_tile_cols = math.ceil(num_cols / chunk_size)
 
-    dem_tiles = []
-    fdr_tiles = []
+    tile_edge_data = []
     # here we use a 1 cell buffer so that there
     # are no uncertain edges, only low and high edges
+    # this removes the need to handle uncertain edges
+    # and the need to save the perimeter DEM elevation values
+    # for all tiles
+    for dem_tile in raster_chunker(dem_band, chunk_size, 1):
+        fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
+        fdr_tile.read(fdr_band)
+        # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
+        # creating the flat mask and labels
+        to_higher, to_lower, labels = resolve_flats_tile(dem_tile.data, fdr_tile.data)
+        tile_edge_data.append(
+            TileEdgeData(dem_tile.row, dem_tile.col, labels, to_higher, to_lower)
+        )
+
     for dem_tile in raster_chunker(dem_band, chunk_size, 1):
         dem_tiles.append(dem_tile.data)
     for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
