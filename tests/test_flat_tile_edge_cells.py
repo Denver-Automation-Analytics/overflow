@@ -115,14 +115,6 @@ def test_iterate_side(test_edge_cells):
 
 def test_distance(test_edge_cells):
     """Test the distance method."""
-    expected_dist_from_top_left_to_top = [0, 1, 2, 3, 4, 5]
-    dist_from_top_left_to_top = [
-        test_edge_cells.distance(Side.TOP, 0, Side.TOP, i) for i in range(6)
-    ]
-    assert dist_from_top_left_to_top == expected_dist_from_top_left_to_top
-
-    expected_dist_from_top_left_to_right = [5, 5, 5, 5]
-    dist_from_top_left_to_right = [
-        test_edge_cells.distance(Side.TOP, 0, Side.RIGHT, i) for i in range(4)
-    ]
-    assert dist_from_top_left_to_right == expected_dist_from_top_left_to_right
+    expected_distances = [0, 1, 2, 3, 4, 5, 5, 5, 5, 4, 3, 3, 3, 3, 2, 1]
+    distances = [test_edge_cells.distance(0, i) for i in range(test_edge_cells.size())]
+    assert distances == expected_distances

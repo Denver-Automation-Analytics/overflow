@@ -1,19 +1,17 @@
+from enum import Enum
 import math
 import numpy as np
 from numba import njit
-from .util.raster import raster_chunker, RasterChunk
 from osgeo import gdal
+from .util.raster import raster_chunker, RasterChunk, neighbor_generator
 from .constants import (
     NEIGHBOR_OFFSETS,
     FLOW_DIRECTION_NODATA,
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
     DEFAULT_CHUNK_SIZE,
-    TERRAIN_ID,
 )
-from .util.raster import neighbor_generator
 from .util.numba_datastructures import ResizableFIFOQueue
-from enum import Enum
 
 
 class Side(Enum):
@@ -526,7 +524,7 @@ class FlatTileEdgeCells:
         self.perimeter = []
         # self.perimeter contains one element for each cell in the tile perimeter
         # counting clockwise from the top left corner. This is the flattened
-        # index of the cell
+        # index of the cell in the local graph as well
         #
         # 0 | 1 | 2
         # 7 | - | 3
@@ -634,16 +632,11 @@ class FlatTileEdgeCells:
 
     def distance(
         self,
-        side_or_corner: Side,
         index: int,
-        other_side_or_corner: Side,
         other_index: int,
     ) -> int:
-        # if side_or_corner
-        from_index = self.get_flattened_index_side(side_or_corner, index)
-        to_index = self.get_flattened_index_side(other_side_or_corner, other_index)
-        from_row, from_col = self.get_row_col(from_index)
-        to_row, to_col = self.get_row_col(to_index)
+        from_row, from_col = self.get_row_col(index)
+        to_row, to_col = self.get_row_col(other_index)
         return max(abs(from_row - to_row), abs(from_col - to_col))
 
 
@@ -692,50 +685,30 @@ def construct_local_edge_graph(
 ) -> tuple[list, list, list, list]:
     # connect every cell to every other cell of the same label
     # to make a fully connected graph
-    # TODO, optimize this. We only need to connect some of these cells
+    # TODO: optimize this. We only need to connect some of these cells
     graph = [[] for _ in range(tile_data.labels.size())]
-    for side_or_corner, index, label in tile_data.labels.items():
-        if label == 0:
-            continue
-        for other_side_or_corner, other_index, other_label in tile_data.labels.items():
-            if label == other_label and (side_or_corner, index) != (
-                other_side_or_corner,
-                other_index,
-            ):
-                graph[tile_data.labels.flattened_index(side_or_corner, index)].append(
-                    (
-                        tile_data.labels.flattened_index(
-                            other_side_or_corner, other_index
-                        )
-                        + tile_data.index_offset,
-                        tile_data.distance(
-                            side_or_corner, index, other_side_or_corner, other_index
-                        ),
-                    )
-                )
+    index_offset = tile_data.index_offset
+    for i, label_i in enumerate(tile_data.labels):
+        label_i = tile_data.labels[i]
+        for j, label_j in enumerate(tile_data.labels, i + 1):
+            if label_i == label_j:
+                dist = tile_data.labels.distance(i, j)
+                graph[i].append((j + index_offset, dist))
+                graph[j].append((i + index_offset, dist))
+
     # connect each cell to the high/low terrain node
     high_edges = []
     low_edges = []
-    for side_or_corner, index, distance in tile_data.to_higher.items():
+
+    for i, distance in enumerate(tile_data.to_higher):
         if distance == 0:
             continue
-        high_edges.append(
-            (
-                tile_data.labels.flattened_index(side_or_corner, index)
-                + tile_data.index_offset,
-                distance,
-            )
-        )
-    for side_or_corner, index, distance in tile_data.to_lower.items():
+        high_edges.append((i + index_offset, distance))
+
+    for i, distance in enumerate(tile_data.to_lower):
         if distance == 0:
             continue
-        low_edges.append(
-            (
-                tile_data.labels.flattened_index(side_or_corner, index)
-                + tile_data.index_offset,
-                distance,
-            )
-        )
+        low_edges.append((i + index_offset, distance))
 
     return graph, high_edges, low_edges
 
