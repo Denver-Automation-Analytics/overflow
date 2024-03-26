@@ -635,15 +635,15 @@ def handle_corner(
     corner_b: Corner,
     global_graph: list,
 ):
-    global_index_a = (
-        tile_a.labels.get_flattened_index_corner(corner_a) + tile_a.index_offset
-    )
-    global_index_b = (
-        tile_b.labels.get_flattened_index_corner(corner_b) + tile_b.index_offset
-    )
     label_a = tile_a.labels.get_corner(corner_a)
     label_b = tile_b.labels.get_corner(corner_b)
     if label_a != 0 and label_b != 0:
+        global_index_a = (
+            tile_a.labels.get_flattened_index_corner(corner_a) + tile_a.index_offset
+        )
+        global_index_b = (
+            tile_b.labels.get_flattened_index_corner(corner_b) + tile_b.index_offset
+        )
         join_neighbor(global_index_a, global_index_b, global_graph)
 
 
