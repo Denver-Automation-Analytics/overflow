@@ -202,6 +202,83 @@ def fixture_expected_final_flat_mask():
     )
 
 
+@pytest.fixture(name="expected_fixed_fdr")
+def fixture_expected_fixed_fdr():
+    """Create the expected final flat mask for the test dem.
+
+    Returns:
+        np.ndarray: A 2D array containing the expected final flat mask
+    """
+    return np.array(
+        [
+            [
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_WEST,
+            ],
+            [
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH_WEST,
+            ],
+        ],
+        dtype=np.uint8,
+    )
+
+
 @pytest.fixture(name="dem_zhou_2022")
 def fixture_dem_zhou_2022():
     """DEM from the worked example in Zhou et al. 2022.
@@ -356,6 +433,122 @@ def fixture_fdr_zhou_2022_filepath(fdr_zhou_2022):
     gdal.Unlink(fdr_path)
 
 
+@pytest.fixture(name="expected_final_flat_mask_zhou_2022")
+def fixture_expected_final_flat_mask_zhou_2022():
+    """Create the expected final flat mask for the test dem.
+
+    Returns:
+        np.ndarray: A 2D array containing the expected final flat mask
+    """
+    return np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 12, 10, 8, 6, 2, 2, 0],
+            [0, 12, 9, 7, 5, 5, 6, 0],
+            [0, 10, 9, 6, 6, 5, 2, 0],
+            [0, 8, 7, 6, 6, 4, 2, 0],
+            [0, 6, 5, 7, 7, 5, 2, 0],
+            [0, 2, 6, 8, 8, 6, 6, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ],
+        np.uint32,
+    )
+
+
+@pytest.fixture(name="expected_fixed_fdr_zhou_2022")
+def fixture_expected_fixed_fdr_zhou_2022():
+    """Create the expected fixed fdr for the test dem.
+
+    Returns:
+        np.ndarray: A 2D array containing the expected fixed fdr
+    """
+    return np.array(
+        [
+            [
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH_EAST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_WEST,
+                FLOW_DIRECTION_NORTH_WEST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH_EAST,
+                FLOW_DIRECTION_NORTH,
+                FLOW_DIRECTION_EAST,
+            ],
+            [
+                FLOW_DIRECTION_SOUTH_WEST,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH,
+                FLOW_DIRECTION_SOUTH_EAST,
+            ],
+        ],
+        np.uint32,
+    )
+
+
 def test_flat_edges(dem, fdr, expected_high_edges, expected_low_edges):
     """Test the flat_edges function.
 
@@ -455,80 +648,32 @@ def test_resolve_flats(dem, fdr, expected_final_flat_mask, expected_flat_labels)
     assert np.array_equal(labels, expected_flat_labels)
 
 
-def test_d8_masked_flow_dirs(fdr, expected_final_flat_mask, expected_flat_labels):
+def test_d8_masked_flow_dirs(
+    fdr, expected_final_flat_mask, expected_flat_labels, expected_fixed_fdr
+):
     """Test the d8_masked_flow_dirs function."""
     test_fdr = fdr.copy()
     d8_masked_flow_dirs(expected_final_flat_mask, test_fdr, expected_flat_labels)
-    expected_fdr = np.array(
-        [
-            [
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-            ],
-            [
-                FLOW_DIRECTION_EAST,
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_WEST,
-            ],
-            [
-                FLOW_DIRECTION_EAST,
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_WEST,
-            ],
-            [
-                FLOW_DIRECTION_EAST,
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_WEST,
-            ],
-            [
-                FLOW_DIRECTION_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_WEST,
-                FLOW_DIRECTION_WEST,
-            ],
-            [
-                FLOW_DIRECTION_EAST,
-                FLOW_DIRECTION_SOUTH_EAST,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_SOUTH_WEST,
-                FLOW_DIRECTION_WEST,
-                FLOW_DIRECTION_NORTH_WEST,
-                FLOW_DIRECTION_WEST,
-            ],
-            [
-                FLOW_DIRECTION_NORTH_EAST,
-                FLOW_DIRECTION_NORTH,
-                FLOW_DIRECTION_SOUTH,
-                FLOW_DIRECTION_NORTH,
-                FLOW_DIRECTION_NORTH,
-                FLOW_DIRECTION_NORTH,
-                FLOW_DIRECTION_NORTH_WEST,
-            ],
-        ],
-        dtype=np.uint8,
+    assert np.array_equal(test_fdr, expected_fixed_fdr)
+
+
+def test_fix_flats(
+    dem_zhou_2022_filepath,
+    fdr_zhou_2022_filepath,
+    expected_final_flat_mask_zhou_2022,
+    expected_fixed_fdr_zhou_2022,
+):
+    output_filepath = "/vsimem/fixed_fdr.tif"
+    fix_flats(
+        dem_zhou_2022_filepath,
+        fdr_zhou_2022_filepath,
+        output_filepath,
+        chunk_size=4,
+        working_dir="/vsimem/",
     )
-    assert np.array_equal(test_fdr, expected_fdr)
-
-
-def test_fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath):
-    fix_flats(dem_zhou_2022_filepath, fdr_zhou_2022_filepath, chunk_size=4)
+    fixed_fdr_dataset = gdal.Open(output_filepath)
+    fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
+    assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)
+    flat_mask_dataset = gdal.Open("/vsimem/flat_mask.tif")
+    flat_mask = flat_mask_dataset.GetRasterBand(1).ReadAsArray()
+    assert np.array_equal(flat_mask, expected_final_flat_mask_zhou_2022)
