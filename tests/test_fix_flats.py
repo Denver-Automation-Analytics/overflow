@@ -289,7 +289,7 @@ def fixture_fdr_zhou_2022():
                 FLOW_DIRECTION_UNDEFINED,
                 FLOW_DIRECTION_UNDEFINED,
                 FLOW_DIRECTION_UNDEFINED,
-                FLOW_DIRECTION_UNDEFINED,
+                FLOW_DIRECTION_SOUTH_EAST,
                 FLOW_DIRECTION_EAST,
             ],
             [
