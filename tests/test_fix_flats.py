@@ -664,6 +664,7 @@ def test_fix_flats(
     expected_fixed_fdr_zhou_2022,
 ):
     output_filepath = "/vsimem/fixed_fdr.tif"
+    # TODO: chunk size 2 does not produce the expected results
     fix_flats(
         dem_zhou_2022_filepath,
         fdr_zhou_2022_filepath,
@@ -671,9 +672,9 @@ def test_fix_flats(
         chunk_size=4,
         working_dir="/vsimem/",
     )
-    fixed_fdr_dataset = gdal.Open(output_filepath)
-    fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
-    assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)
     flat_mask_dataset = gdal.Open("/vsimem/flat_mask.tif")
     flat_mask = flat_mask_dataset.GetRasterBand(1).ReadAsArray()
     assert np.array_equal(flat_mask, expected_final_flat_mask_zhou_2022)
+    fixed_fdr_dataset = gdal.Open(output_filepath)
+    fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
+    assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)
