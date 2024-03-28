@@ -15,7 +15,7 @@ def fixture_test_edge_cells():
         ],
         dtype=np.int32,
     )
-    return FlatTileEdgeCells(array)
+    return FlatTileEdgeCells(array, 0)
 
 
 @pytest.fixture(name="test_perimeter_indices")

@@ -655,6 +655,7 @@ def test_fix_flats(
         fdr_zhou_2022_filepath,
         output_filepath,
         chunk_size=chunk_size,
+        working_dir="/vsimem/",
     )
     fixed_fdr_dataset = gdal.Open(output_filepath)
     fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
