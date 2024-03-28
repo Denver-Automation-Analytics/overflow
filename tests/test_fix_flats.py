@@ -433,28 +433,6 @@ def fixture_fdr_zhou_2022_filepath(fdr_zhou_2022):
     gdal.Unlink(fdr_path)
 
 
-@pytest.fixture(name="expected_final_flat_mask_zhou_2022")
-def fixture_expected_final_flat_mask_zhou_2022():
-    """Create the expected final flat mask for the test dem.
-
-    Returns:
-        np.ndarray: A 2D array containing the expected final flat mask
-    """
-    return np.array(
-        [
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 12, 10, 8, 6, 2, 2, 0],
-            [0, 12, 9, 7, 5, 5, 6, 0],
-            [0, 10, 9, 6, 6, 5, 2, 0],
-            [0, 8, 7, 6, 6, 4, 2, 0],
-            [0, 6, 5, 7, 7, 5, 2, 0],
-            [0, 2, 6, 8, 8, 6, 6, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-        ],
-        np.uint32,
-    )
-
-
 @pytest.fixture(name="expected_fixed_fdr_zhou_2022")
 def fixture_expected_fixed_fdr_zhou_2022():
     """Create the expected fixed fdr for the test dem.
@@ -657,24 +635,27 @@ def test_d8_masked_flow_dirs(
     assert np.array_equal(test_fdr, expected_fixed_fdr)
 
 
+@pytest.mark.parametrize("chunk_size", [2, 4, 8, 12])
 def test_fix_flats(
     dem_zhou_2022_filepath,
     fdr_zhou_2022_filepath,
-    expected_final_flat_mask_zhou_2022,
     expected_fixed_fdr_zhou_2022,
+    chunk_size,
 ):
-    output_filepath = "/vsimem/fixed_fdr.tif"
-    # TODO: chunk size 2 does not produce the expected results
+    """
+    Test the fix_flats function with different chunk sizes.
+     - Chunk size 2 will contain tiles that contain only flats
+     - Chunk size 4 will test the example in the paper
+     - Chunk size 8 will test a single tile the size of the entire DEM
+     - Chunk size 12 will test a chunk size larger than the DEM
+    """
+    output_filepath = f"/vsimem/fixed_fdr_{chunk_size}.tif"
     fix_flats(
         dem_zhou_2022_filepath,
         fdr_zhou_2022_filepath,
         output_filepath,
-        chunk_size=4,
-        working_dir="/vsimem/",
+        chunk_size=chunk_size,
     )
-    flat_mask_dataset = gdal.Open("/vsimem/flat_mask.tif")
-    flat_mask = flat_mask_dataset.GetRasterBand(1).ReadAsArray()
-    assert np.array_equal(flat_mask, expected_final_flat_mask_zhou_2022)
     fixed_fdr_dataset = gdal.Open(output_filepath)
     fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
     assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)

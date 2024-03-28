@@ -5,8 +5,9 @@ import math
 import heapq
 import tempfile
 import numpy as np
-from numba import njit
+from numba import njit, int32
 from osgeo import gdal
+from numba.experimental import jitclass
 from .util.raster import raster_chunker, RasterChunk, neighbor_generator
 from .constants import (
     NEIGHBOR_OFFSETS,
@@ -364,95 +365,54 @@ def d8_masked_flow_dirs(
         fdr[row, col] = nmin
 
 
-def away_from_higher_tile(
-    labels: np.ndarray,
-    flat_mask: np.ndarray,
-    fdr: np.ndarray,
-    high_edges: list,
-    flat_height: np.array,
-) -> None:
-    if len(high_edges) == 0:
-        return
-    high_edges = ResizableFIFOQueue(high_edges)
-    loops = 1
-    marker = (-1, -1)
-    high_edges.push(marker)
-    while len(high_edges) > 1:
-        row, col = high_edges.pop()
-        if row == marker[0] and col == marker[1]:
-            loops += 1
-            high_edges.push(marker)
-            continue
-        if flat_mask[row, col] > 0:
-            continue
-        flat_mask[row, col] = loops
-        flat_height[labels[row, col] - 1] = loops
-        for neighbor_row, neighbor_col in neighbor_generator(
-            row, col, fdr.shape[0], fdr.shape[1]
-        ):
-            if (
-                labels[neighbor_row, neighbor_col] == labels[row, col]
-                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
-            ):
-                high_edges.push((neighbor_row, neighbor_col))
-
-
-def towards_lower_tile(
-    labels: np.ndarray,
-    flat_mask: np.ndarray,
-    fdr: np.ndarray,
-    low_edges: list,
-    flat_height: np.array,
-) -> None:
-    # make all entries in flat_mask negative
-    flat_mask *= -1
-    loops = 1
-    marker = (-1, -1)
-    low_edges = ResizableFIFOQueue(low_edges)
-    low_edges.push(marker)
-    while len(low_edges) > 1:
-        row, col = low_edges.pop()
-        if row == marker[0] and col == marker[1]:
-            loops += 1
-            low_edges.push(marker)
-            continue
-        if flat_mask[row, col] > 0:
-            continue
-        if flat_mask[row, col] < 0:
-            flat_mask[row, col] += flat_height[labels[row, col] - 1] + 2 * loops
-        else:
-            flat_mask[row, col] = 2 * loops
-        for neighbor_row, neighbor_col in neighbor_generator(
-            row, col, fdr.shape[0], fdr.shape[1]
-        ):
-            if (
-                labels[neighbor_row, neighbor_col] == labels[row, col]
-                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
-            ):
-                low_edges.push((neighbor_row, neighbor_col))
-
-
+@njit
 def compute_gradient(
     labels: np.ndarray,
     fdr: np.ndarray,
-    high_edges: list,
+    edges_cells: list,
 ) -> np.ndarray:
+    """
+    Compute the gradient from the given edge cells across the flats.
+
+    This function uses a flood-fill approach to compute the gradient from the given edge cells
+    across the flats. It assigns increasing values to cells as it moves away from the edge cells,
+    creating a gradient that can be used to determine flow directions within the flats.
+
+    Args:
+        labels (np.ndarray): Array indicating which flat each cell is a member of. Cells in a flat
+            have a value greater than zero indicating the label of the flat, otherwise, they have a
+            value of 0.
+        fdr (np.ndarray): Array containing flow directions for each cell. Cells without a local
+            gradient have a value of FLOW_DIRECTION_UNDEFINED, while all other cells have defined
+            flow directions or FLOW_DIRECTION_NODATA.
+        edges_cells (list): List of edge cells from which to compute the gradient. These can be
+            either high edge cells or low edge cells.
+
+    Returns:
+        np.ndarray: Array containing the computed gradient values. Cells not part of a flat have a
+            value of 0.
+    """
     graident = np.zeros_like(labels, dtype=np.int32)
-    if len(high_edges) == 0:
+    if len(edges_cells) == 0:
         return graident
-    high_edges = ResizableFIFOQueue(high_edges)
+    # Create a FIFO queue to store cells for processing
+    edges_cells = ResizableFIFOQueue(edges_cells)
     loops = 1
     marker = (-1, -1)
-    high_edges.push(marker)
-    while len(high_edges) > 1:
-        row, col = high_edges.pop()
+    edges_cells.push(marker)
+    while len(edges_cells) > 1:
+        row, col = edges_cells.pop()
+        # Check if the marker is encountered, indicating the end of a loop
         if row == marker[0] and col == marker[1]:
             loops += 1
-            high_edges.push(marker)
+            edges_cells.push(marker)
             continue
+        # Skip cells that have already been assigned a gradient value
         if graident[row, col] > 0:
             continue
+        # Assign the current loop value as the gradient value for the cell
         graident[row, col] = loops
+        # Add neighboring cells within the same flat to the queue for processing
         for neighbor_row, neighbor_col in neighbor_generator(
             row, col, fdr.shape[0], fdr.shape[1]
         ):
@@ -460,18 +420,51 @@ def compute_gradient(
                 labels[neighbor_row, neighbor_col] == labels[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
-                high_edges.push((neighbor_row, neighbor_col))
+                edges_cells.push((neighbor_row, neighbor_col))
     return graident
 
 
+@njit
 def resolve_flats_tile(
     dem: np.ndarray, flow_dirs: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Algorithm 1 ResolveFlats modified for use in the tile-based processing pipeline."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:
+    """
+    Resolve flats in a tile-based processing pipeline.
+
+    This function is a modified version of the resolve_flats algorithm for use in a tile-based
+    processing pipeline. It finds flat edges, labels the flats, and computes gradients away from
+    higher and lower terrain within the flats. The computed gradients can be used to determine
+    flow directions across the flats.
+
+    Args:
+        dem (np.ndarray): Array containing the elevation values for each cell in the tile.
+        flow_dirs (np.ndarray): Array containing flow directions for each cell in the tile.
+            Cells without a local gradient have a value of FLOW_DIRECTION_UNDEFINED,
+            while all other cells have defined flow directions or FLOW_DIRECTION_NODATA.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:
+            - dist_to_higher: Array containing the gradient values away from higher terrain.
+            - dist_to_lower: Array containing the gradient values towards lower terrain.
+            - labels: Array indicating which flat each cell is a member of.
+            - high_edges: List of high edge cells.
+            - low_edges: List of low edge cells.
+    """
 
     # Find flat edges, this will not result in any uncertain edges
     # because we are processing with a 1 cell buffer
     high_edges, low_edges = flat_edges(dem, flow_dirs)
+
+    # if the tile is entirely flat, set labels to 1 and return zero gradients
+    if (
+        len(low_edges) == 0
+        and len(high_edges) == 0
+        and flow_dirs[0, 0] == FLOW_DIRECTION_UNDEFINED
+    ):
+        labels = np.ones_like(dem, dtype=np.int32)
+        dist_to_higher = np.zeros_like(dem, dtype=np.int32)
+        dist_to_lower = np.zeros_like(dem, dtype=np.int32)
+        return dist_to_higher, dist_to_lower, labels, high_edges, low_edges
 
     # Initialize labels array
     labels = np.zeros_like(dem, dtype=np.int32)
@@ -485,102 +478,149 @@ def resolve_flats_tile(
 
     # Compute gradient away from higher terrain
     dist_to_higher = compute_gradient(labels, flow_dirs, high_edges)
-    # Compute gradient towards lower terrain
+    # Compute gradient away from lower terrain
     dist_to_lower = compute_gradient(labels, flow_dirs, low_edges)
 
     return dist_to_higher, dist_to_lower, labels, high_edges, low_edges
 
 
+@jitclass(
+    [
+        ("rows", int32),
+        ("cols", int32),
+        ("perimeter", int32[:]),
+    ]
+)
 class FlatTileEdgeCells:
+    """
+    A class representing the cells on the perimeter of a 2D array (tile).
+
+    The perimeter cells are stored in a flattened 1D array in a clockwise order
+    starting from the top-left corner.
+
+    Attributes:
+        rows (int): The number of rows in the original 2D array.
+        cols (int): The number of columns in the original 2D array.
+        perimeter (np.ndarray): A 1D contiguous array containing the flattened perimeter cells.
+    """
+
     def __init__(self, array):
+        ## self.rows = len(array)
+        ## self.cols = len(array[0])
+        ## self.perimeter = []
+        ## # self.perimeter contains one element for each cell in the tile perimeter
+        ## # counting clockwise from the top left corner. This is the flattened
+        ## # index of the cell in the local graph as well
+        ## #
+        ## # 0 | 1 | 2
+        ## # 7 | - | 3
+        ## # 6 | 5 | 4
+        ## #
+        ## self.perimeter.extend(array[0])  # Top edge
+        ## self.perimeter.extend(
+        ##     row[-1] for row in array[1:-1]
+        ## )  # Right edge (not including corners)
+        ## self.perimeter.extend(array[-1][::-1])  # Bottom edge (reversed)
+        ## self.perimeter.extend(
+        ##     row[0] for row in array[-2:0:-1]
+        ## )  # Left edge (reversed, not including corners)
+        ## self.perimeter = np.ascontiguousarray(self.perimeter)
+
+        ## self.rows = len(array)
+        ## self.cols = len(array[0])
+        ## top = array[0]
+        ## right = array[1:-1, -1]
+        ## bottom = array[-1, ::-1]
+        ## left = array[-2:0:-1, 0]
+        ## self.perimeter = np.concatenate((top, right, bottom, left))
+
         self.rows = len(array)
         self.cols = len(array[0])
-        self.perimeter = []
-        # self.perimeter contains one element for each cell in the tile perimeter
-        # counting clockwise from the top left corner. This is the flattened
-        # index of the cell in the local graph as well
-        #
-        # 0 | 1 | 2
-        # 7 | - | 3
-        # 6 | 5 | 4
-        #
-        self.perimeter.extend(array[0])  # Top edge
-        self.perimeter.extend(
-            row[-1] for row in array[1:-1]
-        )  # Right edge (not including corners)
-        self.perimeter.extend(array[-1][::-1])  # Bottom edge (reversed)
-        self.perimeter.extend(
-            row[0] for row in array[-2:0:-1]
-        )  # Left edge (reversed, not including corners)
-        self.perimeter = np.ascontiguousarray(self.perimeter)
+        self.perimeter = np.empty(2 * (self.rows + self.cols) - 4, dtype=array.dtype)
 
-    def get_flattened_index(self, row, col):
-        #
-        # 0 | 1 | 2
-        # 7 | - | 3
-        # 6 | 5 | 4
-        #
-        # check if row and col are on the perimeter
-        if 0 < row < self.rows - 1 and 0 < col < self.cols - 1:
-            raise IndexError("Row and col must be on the perimeter")
-        # check bounds
-        if row < 0 or row >= self.rows or col < 0 or col >= self.cols:
-            raise IndexError("Row and col must be within bounds")
-        if row == 0:  # Top edge
+        # Fill the perimeter array
+        self.perimeter[: self.cols] = array[0]  # top
+        self.perimeter[self.cols : self.cols + self.rows - 2] = array[1:-1, -1]  # right
+        self.perimeter[self.cols + self.rows - 2 : 2 * self.cols + self.rows - 2] = (
+            array[-1, ::-1]
+        )  # bottom
+        self.perimeter[2 * self.cols + self.rows - 2 :] = array[-2:0:-1, 0]  # left
+
+    def get_index(self, row, col):
+        """
+        Returns the flattened index of the cell at the given (row, col) coordinates.
+        """
+        if row == 0:
             return col
-        elif row == self.rows - 1:  # Bottom edge
-            return self.cols + self.rows - 2 + (self.cols - col - 1)
-        elif col == self.cols - 1:  # Right edge
+        elif row == self.rows - 1:
+            return self.cols + self.rows - 2 + self.cols - col - 1
+        elif col == self.cols - 1:
             return self.cols + row - 1
-        else:  # Left edge
-            return 2 * self.cols + self.rows - 2 + (self.rows - row - 2)
+        else:
+            return 2 * self.cols + self.rows - 2 + self.rows - row - 2
 
-    def get_flattened_index_corner(self, corner: Corner):
+    def get_index_corner(self, corner: Corner):
+        """
+        Returns the flattened index of the cell at the specified corner.
+        """
         if corner == Corner.TOP_LEFT:
-            return self.get_flattened_index(0, 0)
+            return self.get_index(0, 0)
         elif corner == Corner.TOP_RIGHT:
-            return self.get_flattened_index(0, self.cols - 1)
+            return self.get_index(0, self.cols - 1)
         elif corner == Corner.BOTTOM_RIGHT:
-            return self.get_flattened_index(self.rows - 1, self.cols - 1)
+            return self.get_index(self.rows - 1, self.cols - 1)
         elif corner == Corner.BOTTOM_LEFT:
-            return self.get_flattened_index(self.rows - 1, 0)
+            return self.get_index(self.rows - 1, 0)
         else:
             raise ValueError("Invalid corner")
 
-    def get_flattened_index_side(self, side: Side, index: int):
+    def get_index_side(self, side: Side, index: int):
+        """
+        Returns the flattened index of the cell at the specified side and index.
+        """
         if side == Side.TOP:
-            return self.get_flattened_index(0, index)
+            return self.get_index(0, index)
         elif side == Side.RIGHT:
-            return self.get_flattened_index(index, self.cols - 1)
+            return self.get_index(index, self.cols - 1)
         elif side == Side.BOTTOM:
-            return self.get_flattened_index(self.rows - 1, index)
+            return self.get_index(self.rows - 1, index)
         elif side == Side.LEFT:
-            return self.get_flattened_index(index, 0)
+            return self.get_index(index, 0)
         else:
             raise ValueError("Invalid side")
 
     def get_row_col(self, index):
-        #
-        # 0 | 1 | 2
-        # 7 | - | 3
-        # 6 | 5 | 4
-        #
-        # check bounds
-        if index < 0 or index >= self.perimeter.size:
-            raise IndexError("Index out of bounds")
-        if index < self.cols:  # Top edge
+        """
+        Returns the (row, col) coordinates of the cell at the given flattened index.
+        """
+        if index < self.cols:
             return 0, index
-        elif index < self.cols + self.rows - 1:  # Right edge
+        elif index < self.cols + self.rows - 1:
             return index - self.cols + 1, self.cols - 1
-        elif index < 2 * self.cols + self.rows - 2:  # Bottom edge
-            return self.rows - 1, self.cols - (index - self.cols - self.rows + 3)
-        else:  # Left edge
-            return self.rows - (index - 2 * self.cols - self.rows + 4), 0
+        elif index < 2 * self.cols + self.rows - 2:
+            return self.rows - 1, 2 * self.cols + self.rows - index - 3
+        else:
+            return 2 * self.cols + 2 * self.rows - index - 4, 0
 
     def size(self):
+        """
+        Returns the total number of cells in the perimeter.
+        """
         return self.perimeter.size
 
     def get_side(self, side: Side):
+        """
+        Returns the cells on the specified side of the perimeter.
+
+        Args:
+            side (Side): The side of the perimeter.
+
+        Returns:
+            np.ndarray: A contiguous array containing the cells on the specified side.
+
+        Raises:
+            ValueError: If an invalid side is specified.
+        """
         if side == Side.TOP:
             # The enitire top edge (from left to right) includes the corners
             return self.perimeter[: self.cols]
@@ -595,26 +635,66 @@ class FlatTileEdgeCells:
                 ::-1
             ]  # reversed from internal representation
         elif side == Side.LEFT:
-            return np.concatenate(
-                (self.perimeter[-self.rows + 1 :], [self.perimeter[0]])
-            )[::-1]
+            # The entire left edge (from bottom to top) includes the corners
+            indices = np.empty(self.rows, dtype=np.int32)
+            indices[0] = 0
+            indices[1:] = np.arange(
+                self.perimeter.size - 1, self.perimeter.size - self.rows, -1
+            )
+            return self.perimeter[indices]
         else:
             raise ValueError("Invalid side")
 
     def get_corner(self, corner: Corner):
-        return self.perimeter[self.get_flattened_index_corner(corner)]
+        """
+        Returns the cell at the specified corner of the perimeter.
+
+        Args:
+            corner (Corner): The corner of the perimeter.
+
+        Returns:
+            int: The cell value at the specified corner.
+        """
+        return self.perimeter[self.get_index_corner(corner)]
 
     def distance(
         self,
         index: int,
         other_index: int,
     ) -> int:
+        """
+        Returns the Chebyshev distance between two cells specified by their flattened indices.
+
+        The Chebyshev distance is the maximum of the absolute differences between the row and column coordinates.
+
+        Args:
+            index (int): The flattened index of the first cell.
+            other_index (int): The flattened index of the second cell.
+
+        Returns:
+            int: The Chebyshev distance between the two cells.
+        """
         from_row, from_col = self.get_row_col(index)
         to_row, to_col = self.get_row_col(other_index)
         return max(abs(from_row - to_row), abs(from_col - to_col))
 
 
 class FlatTileEdgeData:
+    """
+    A class representing the edge data of a flat tile.
+
+    This class stores the edge data of a flat tile, including the gradients to higher and lower
+    terrain, the labels of the perimeter cells, and the tile's position in the global graph.
+
+    Attributes:
+        to_higher (FlatTileEdgeCells): The gradient values to higher terrain for the perimeter cells.
+        to_lower (FlatTileEdgeCells): The gradient values to lower terrain for the perimeter cells.
+        labels (FlatTileEdgeCells): The labels of the perimeter cells.
+        row (int): The row index of the tile in the global grid.
+        col (int): The column index of the tile in the global grid.
+        index_offset (int): The offset of the starting index in the global graph for this tile.
+    """
+
     def __init__(self, row, col, tile_index, labels, to_higher, to_lower):
         self.to_higher = FlatTileEdgeCells(to_higher)
         self.to_lower = FlatTileEdgeCells(to_lower)
@@ -649,9 +729,10 @@ def construct_local_edge_graph(
         for i, group_i in enumerate(group):
             # connect to the next cell with the same label
             j = (i + 1) % len(group)
-            dist = tile_data.labels.distance(group_i, group[j])
-            graph[group_i].append((group[j] + index_offset, dist))
-            graph[group[j]].append((group_i + index_offset, dist))
+            if j != i:
+                dist = tile_data.labels.distance(group_i, group[j])
+                graph[group_i].append((group[j] + index_offset, dist))
+                graph[group[j]].append((group_i + index_offset, dist))
 
         # connect non-neighboring cells to each other if they are part of the same group
         # we can skip any edges where there exist other paths that have the shortest
@@ -720,26 +801,22 @@ def handle_edge(
         if label_i == 0:
             continue
         label_j = tile_b_side[i]
-        global_index_a = (
-            tile_a.labels.get_flattened_index_side(side_a, i) + tile_a.index_offset
-        )
+        global_index_a = tile_a.labels.get_index_side(side_a, i) + tile_a.index_offset
         # if the neighboring cell directly adjacent is part of a flat, connect this cell to it
         if label_j != 0:
             global_index_b = (
-                tile_b.labels.get_flattened_index_side(side_b, i) + tile_b.index_offset
+                tile_b.labels.get_index_side(side_b, i) + tile_b.index_offset
             )
             join_neighbor(global_index_a, global_index_b, global_graph)
         # if the neighboring cell diagonally is part of a flat, connect this cell to it
         if i != 0 and tile_b_side[i - 1] != 0:
             global_index_b = (
-                tile_b.labels.get_flattened_index_side(side_b, i - 1)
-                + tile_b.index_offset
+                tile_b.labels.get_index_side(side_b, i - 1) + tile_b.index_offset
             )
             join_neighbor(global_index_a, global_index_b, global_graph)
         if i != tile_a_side.size - 1 and tile_b_side[i + 1] != 0:
             global_index_b = (
-                tile_b.labels.get_flattened_index_side(side_b, i + 1)
-                + tile_b.index_offset
+                tile_b.labels.get_index_side(side_b, i + 1) + tile_b.index_offset
             )
             join_neighbor(global_index_a, global_index_b, global_graph)
 
@@ -754,12 +831,8 @@ def handle_corner(
     label_a = tile_a.labels.get_corner(corner_a)
     label_b = tile_b.labels.get_corner(corner_b)
     if label_a != 0 and label_b != 0:
-        global_index_a = (
-            tile_a.labels.get_flattened_index_corner(corner_a) + tile_a.index_offset
-        )
-        global_index_b = (
-            tile_b.labels.get_flattened_index_corner(corner_b) + tile_b.index_offset
-        )
+        global_index_a = tile_a.labels.get_index_corner(corner_a) + tile_a.index_offset
+        global_index_b = tile_b.labels.get_index_corner(corner_b) + tile_b.index_offset
         join_neighbor(global_index_a, global_index_b, global_graph)
 
 
@@ -789,7 +862,7 @@ def join_adjacent_tiles(
     handle_corner(tile_b, tile_c, Corner.BOTTOM_LEFT, Corner.TOP_RIGHT, global_graph)
 
 
-def compute_dist(global_graph: list, terrain_edges: list):
+def solve_graph(global_graph: list, terrain_edges: list):
     min_dist = []
     # using djikstra's algorithm, find the minimum distance to all cells on the perimeter
     # from terrain_edges which is a single node connecting all flat edge cells to the high terrain node
@@ -936,8 +1009,8 @@ def fix_flats(
             D = tile_edge_data[(i + 1, j + 1)]
             join_adjacent_tiles(A, B, C, D, global_graph)
 
-    min_dist_high = compute_dist(global_graph, global_high_edges)
-    min_dist_low = compute_dist(global_graph, global_low_edges)
+    min_dist_high = solve_graph(global_graph, global_high_edges)
+    min_dist_low = solve_graph(global_graph, global_low_edges)
     # remove low edges from min_dist_high
     # if min_dist_low == 1, the cell is part of a low edge
     for i, dist in enumerate(min_dist_low):
@@ -1016,6 +1089,7 @@ def fix_flats(
         adjusted_low_edges = ResizableFIFOQueue(adjusted_low_edges)
         loops = 1
         flat_mask *= -1
+        LARGE_INT = (2**31 - 1) // 2
         while len(adjusted_low_edges) > 1 or loops < max_low_loop:
             row, col = adjusted_low_edges.pop()
             if row == marker[0] and col == marker[1]:
@@ -1028,7 +1102,7 @@ def fix_flats(
             if flat_mask[row, col] > 0:
                 continue
             if flat_mask[row, col] < 0:
-                flat_mask[row, col] += flat_height[labels[row, col] - 1] + 2 * loops
+                flat_mask[row, col] += LARGE_INT + 2 * loops
             else:
                 flat_mask[row, col] = 2 * loops
             for neighbor_row, neighbor_col in neighbor_generator(

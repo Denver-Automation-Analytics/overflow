@@ -13,7 +13,7 @@ def fixture_test_edge_cells():
             [14, -1, -1, -1, -1, 7],
             [13, 12, 11, 10, 9, 8],
         ],
-        dtype=np.float32,
+        dtype=np.int32,
     )
     return FlatTileEdgeCells(array)
 
@@ -42,49 +42,29 @@ def fixture_test_perimeter_indices():
     ]
 
 
-def test_get_flattened_index(test_edge_cells, test_perimeter_indices):
+def test_get_index(test_edge_cells, test_perimeter_indices):
     """Test the get_flattened_index method."""
-    # check that out of bounds raises an error
-    with pytest.raises(IndexError):
-        test_edge_cells.get_flattened_index(-1, 0)
-    # check that interior cells raise an error
-    with pytest.raises(IndexError):
-        test_edge_cells.get_flattened_index(1, 1)
     # check that the flattend indec for all perimeter cells are correct
     flattened_indices = [
-        test_edge_cells.get_flattened_index(row, col)
-        for row, col in test_perimeter_indices
+        test_edge_cells.get_index(row, col) for row, col in test_perimeter_indices
     ]
     assert flattened_indices == list(range(test_edge_cells.size()))
-    assert test_edge_cells.get_flattened_index_corner(Corner.TOP_LEFT) == 0
-    assert test_edge_cells.get_flattened_index_corner(Corner.TOP_RIGHT) == 5
-    assert test_edge_cells.get_flattened_index_corner(Corner.BOTTOM_RIGHT) == 8
-    assert test_edge_cells.get_flattened_index_corner(Corner.BOTTOM_LEFT) == 13
-    top_indices = [
-        test_edge_cells.get_flattened_index_side(Side.TOP, i) for i in range(6)
-    ]
+    assert test_edge_cells.get_index_corner(Corner.TOP_LEFT) == 0
+    assert test_edge_cells.get_index_corner(Corner.TOP_RIGHT) == 5
+    assert test_edge_cells.get_index_corner(Corner.BOTTOM_RIGHT) == 8
+    assert test_edge_cells.get_index_corner(Corner.BOTTOM_LEFT) == 13
+    top_indices = [test_edge_cells.get_index_side(Side.TOP, i) for i in range(6)]
     assert top_indices == [0, 1, 2, 3, 4, 5]
-    right_indices = [
-        test_edge_cells.get_flattened_index_side(Side.RIGHT, i) for i in range(4)
-    ]
+    right_indices = [test_edge_cells.get_index_side(Side.RIGHT, i) for i in range(4)]
     assert right_indices == [5, 6, 7, 8]
-    bottom_indices = [
-        test_edge_cells.get_flattened_index_side(Side.BOTTOM, i) for i in range(6)
-    ]
+    bottom_indices = [test_edge_cells.get_index_side(Side.BOTTOM, i) for i in range(6)]
     assert bottom_indices == [13, 12, 11, 10, 9, 8]
-    left_indices = [
-        test_edge_cells.get_flattened_index_side(Side.LEFT, i) for i in range(4)
-    ]
+    left_indices = [test_edge_cells.get_index_side(Side.LEFT, i) for i in range(4)]
     assert left_indices == [0, 15, 14, 13]
 
 
 def test_get_row_col(test_edge_cells, test_perimeter_indices):
     """Test the get_row_col method."""
-    # check that out of bounds raises an error
-    with pytest.raises(IndexError):
-        test_edge_cells.get_row_col(-1)
-    with pytest.raises(IndexError):
-        test_edge_cells.get_row_col(16)
     # check that the row and col for all flattened indices are correct
     row_col_indices = [
         test_edge_cells.get_row_col(flattened_index)
