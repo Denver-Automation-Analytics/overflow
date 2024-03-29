@@ -37,7 +37,7 @@ class Queue:
             The initial data to populate the queue.
         """
         self._front = 0
-        self._data = np.array(data, dtype=np.int64)
+        self._data = np.array(list(data), dtype=np.int64)
         self._size = self._data.shape[0]
 
     def push(self, value):

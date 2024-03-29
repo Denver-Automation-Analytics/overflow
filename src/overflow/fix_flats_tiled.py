@@ -4,9 +4,11 @@ import math
 import heapq
 import tempfile
 import numpy as np
-from numba import njit
+from numba import njit, int64
 from osgeo import gdal
+import concurrent.futures
 from numba.typed import List
+from numba.types import UniTuple, Array
 from .util.raster import (
     raster_chunker,
     RasterChunk,
@@ -88,6 +90,20 @@ def compute_gradient(
 
 
 @njit
+def filter_edges(edges, dem_shape):
+    filtered_edges = List()
+    for row, col in edges:
+        if (
+            row != 0
+            and row != dem_shape[0] + 1
+            and col != 0
+            and col != dem_shape[1] + 1
+        ):
+            filtered_edges.append((row - 1, col - 1))
+    return filtered_edges
+
+
+@njit
 def resolve_flats_tile(
     dem: np.ndarray, flow_dirs: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:
@@ -122,16 +138,8 @@ def resolve_flats_tile(
     dem = dem[1:-1, 1:-1]
     flow_dirs = flow_dirs[1:-1, 1:-1]
     # remove high and low edges from outside the tile
-    high_edges = [
-        (row - 1, col - 1)
-        for row, col in high_edges
-        if row != 0 and row != dem.shape[0] + 1 and col != 0 and col != dem.shape[1] + 1
-    ]
-    low_edges = [
-        (row - 1, col - 1)
-        for row, col in low_edges
-        if row != 0 and row != dem.shape[0] + 1 and col != 0 and col != dem.shape[1] + 1
-    ]
+    high_edges = filter_edges(high_edges, dem.shape)
+    low_edges = filter_edges(low_edges, dem.shape)
 
     # if the tile is entirely flat, set labels to 1 and return zero gradients
     if (
@@ -205,9 +213,10 @@ def away_from_higher_tile(
     fdr,
     flat_mask,
 ):
+    marker = (-1, -1)
+    interior_high_edges.append(marker)
     interior_high_edges = Queue(interior_high_edges)
     loops = 1
-    marker = (-1, -1)
     while len(interior_high_edges) > 1 or loops < max_high_loop:
         row, col = interior_high_edges.pop()
         if row == marker[0] and col == marker[1]:
@@ -230,7 +239,6 @@ def away_from_higher_tile(
                 interior_high_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
 def towards_lower_tile(
     interior_low_edges,
     exterior_low_edges,
@@ -240,6 +248,8 @@ def towards_lower_tile(
     fdr,
     flat_mask,
 ):
+    marker = (-1, -1)
+    interior_low_edges.append(marker)
     interior_low_edges = Queue(interior_low_edges)
     loops = 1
     flat_mask *= -1
@@ -247,7 +257,6 @@ def towards_lower_tile(
     # as long as is is greater than the maximum distance
     # to any high edge cell in the flat
     max_flat_height = (2**31 - 1) // 2
-    marker = (-1, -1)
     while len(interior_low_edges) > 1 or loops < max_low_loop:
         row, col = interior_low_edges.pop()
         if row == marker[0] and col == marker[1]:
@@ -285,7 +294,7 @@ def construct_local_edge_graph(
     # initalize with empty lists
     for _ in range(labels.size()):
         # let numba infer the type of the list, is there a better way?
-        new_list = []
+        new_list = List()
         new_list.append((-1, -1))
         new_list.pop()
         graph.append(new_list)
@@ -566,19 +575,20 @@ def create_labels_and_graph(
 ):
     tile_labels = {}
     # setup the numba typed lists, is there a better way?
+    num_tiles = math.ceil(fdr_band.YSize / chunk_size) * math.ceil(
+        fdr_band.XSize / chunk_size
+    )
+    perimeter_cells_per_tile = 4 * (chunk_size - 2) + 4
     global_graph = List()
-    init_list = [(-1, -1)]
-    global_graph.append(init_list)
-    global_graph.pop()
-    global_perimeter_high_edges = List()
-    init_edge = (-1, -1)
-    global_perimeter_high_edges.append(init_edge)
-    global_perimeter_high_edges.pop()
-    global_perimeter_low_edges = List()
-    global_perimeter_low_edges.append(init_edge)
-    global_perimeter_low_edges.pop()
-    global_interior_high_edges = []
-    global_interior_low_edges = []
+    for _ in range(num_tiles * perimeter_cells_per_tile):
+        global_graph.append(List.empty_list(UniTuple(int64, 2)))
+    global_perimeter_high_edges = List.empty_list(UniTuple(int64, 2))
+    global_perimeter_low_edges = List.empty_list(UniTuple(int64, 2))
+    global_interior_high_edges = List()
+    global_interior_low_edges = List()
+    for _ in range(num_tiles):
+        global_interior_high_edges.append(List.empty_list(UniTuple(int64, 2)))
+        global_interior_low_edges.append(List.empty_list(UniTuple(int64, 2)))
     tile_index = 0
     for dem_tile in raster_chunker(dem_band, chunk_size, 1):
         # Here we use a 1 cell buffer, this differs from the paper.
@@ -613,12 +623,15 @@ def create_labels_and_graph(
             TileEdgeCells(to_higher, tile_index),
             TileEdgeCells(to_lower, tile_index),
         )
-        tile_index += 1
-        global_graph += graph
+        for i, edge in enumerate(graph):
+            global_graph[i] = edge
         global_perimeter_high_edges += perimeter_high_edges
         global_perimeter_low_edges += perimeter_low_edges
-        global_interior_high_edges.append(high_edges)
-        global_interior_low_edges.append(low_edges)
+        if len(high_edges) > 0:
+            global_interior_high_edges[tile_index] = high_edges
+        if len(low_edges) > 0:
+            global_interior_low_edges[tile_index] = low_edges
+        tile_index += 1
     mosaic_tiles(
         os.path.join(working_directory, "labels"),
         math.ceil(fdr_band.YSize / chunk_size),
@@ -689,9 +702,6 @@ def create_flat_mask(
             exterior_edges, max_high_loop, loop_index_map = get_tile_exterior_edges(
                 min_dist_high, edge_labels
             )
-            marker = (-1, -1)
-            # append the marker here in case the list is empty so numba can infer the type
-            interior_high_edges.append(marker)
             away_from_higher_tile(
                 interior_high_edges,
                 exterior_edges,
@@ -706,8 +716,6 @@ def create_flat_mask(
             exterior_edges, max_low_loop, loop_index_map = get_tile_exterior_edges(
                 min_dist_low, edge_labels
             )
-            # append the marker here in case the list is empty so numba can infer the type
-            interior_low_edges.append(marker)
             towards_lower_tile(
                 interior_low_edges,
                 exterior_edges,
@@ -840,3 +848,6 @@ def fix_flats(
 
     if cleanup_working_dir:
         shutil.rmtree(working_dir)
+    fixed_fdr_ds = None
+    fdr_ds = None
+    dem_ds = None

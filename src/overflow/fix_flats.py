@@ -1,6 +1,7 @@
 import math
 import numpy as np
 from numba import njit, prange
+from numba.typed import List
 from .util.raster import neighbor_generator
 from .constants import (
     NEIGHBOR_OFFSETS,
@@ -35,8 +36,8 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
         tuple[list, list]: A tuple containing the high and low edge cell queues
     """
     # FIFO queues for the high and low edge cells
-    high_edges = []
-    low_edges = []
+    high_edges = List()
+    low_edges = List()
 
     for row, col in np.ndindex(fdr.shape):
         for neighbor_row, neighbor_col in neighbor_generator(
