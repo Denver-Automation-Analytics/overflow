@@ -4,11 +4,11 @@ import math
 import heapq
 import tempfile
 import numpy as np
-from numba import njit, int64
+from numba import njit, int64, prange, int32
 from osgeo import gdal
 import concurrent.futures
-from numba.typed import List
-from numba.types import UniTuple, Array
+from numba.typed import List, Dict
+from numba.types import UniTuple, Tuple, Array
 from .util.raster import (
     raster_chunker,
     RasterChunk,
@@ -344,12 +344,12 @@ def construct_local_edge_graph(
     for i, distance in enumerate(to_higher.perimeter):
         if distance == 0:
             continue
-        high_edges.append((i + index_offset, distance))
+        high_edges.append((i + index_offset, int64(distance)))
 
     for i, distance in enumerate(to_lower.perimeter):
         if distance == 0:
             continue
-        low_edges.append((i + index_offset, distance))
+        low_edges.append((i + index_offset, int64(distance)))
 
     return graph, high_edges, low_edges
 
@@ -570,10 +570,63 @@ def setup_datasets(
     )
 
 
-def create_labels_and_graph(
-    dem_band, fdr_band, chunk_size, working_directory, geotransform, projection
+@njit(parallel=True)
+def create_labels_and_graph_process_tile(
+    dem_list,
+    fdr_list,
+    tile_indices,
+    chunk_size,
+    perimeter_cells_per_tile,
+    tile_index_map,
+    tile_labels,
+    global_graph,
+    global_perimeter_high_edges,
+    global_perimeter_low_edges,
+    global_interior_high_edges,
+    global_interior_low_edges,
 ):
-    tile_labels = {}
+    batch_labels = np.empty((len(dem_list), chunk_size, chunk_size), dtype=np.int32)
+    for i in prange(len(dem_list)):
+        dem = dem_list[i]
+        fdr = fdr_list[i]
+        tile_index = tile_indices[i]
+        # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
+        # creating the flat mask and labels
+        to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(
+            dem, fdr
+        )
+        edge_labels = TileEdgeCells(labels, tile_index)
+        graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
+            edge_labels,
+            TileEdgeCells(to_higher, tile_index),
+            TileEdgeCells(to_lower, tile_index),
+        )
+        tile_row, tile_col = tile_index_map[tile_index]
+        tile_labels[(tile_row, tile_col)] = edge_labels
+        for j, edge in enumerate(graph):
+            global_index = tile_index * perimeter_cells_per_tile + j
+            global_graph[global_index] = edge
+        for edge in perimeter_high_edges:
+            global_perimeter_high_edges.append(edge)
+        for edge in perimeter_low_edges:
+            global_perimeter_low_edges.append(edge)
+        if len(high_edges) > 0:
+            global_interior_high_edges[tile_index] = high_edges
+        if len(low_edges) > 0:
+            global_interior_low_edges[tile_index] = low_edges
+        batch_labels[i] = labels
+    return batch_labels
+
+
+def create_labels_and_graph(
+    dem_band,
+    fdr_band,
+    chunk_size,
+    working_directory,
+    geotransform,
+    projection,
+    batch_size=8,
+):
     # setup the numba typed lists, is there a better way?
     num_tiles = math.ceil(fdr_band.YSize / chunk_size) * math.ceil(
         fdr_band.XSize / chunk_size
@@ -590,6 +643,20 @@ def create_labels_and_graph(
         global_interior_high_edges.append(List.empty_list(UniTuple(int64, 2)))
         global_interior_low_edges.append(List.empty_list(UniTuple(int64, 2)))
     tile_index = 0
+
+    dem_batch = []
+    fdr_batch = []
+    batch_tile_indices = []
+    num_tiles = math.ceil(fdr_band.YSize / chunk_size) * math.ceil(
+        fdr_band.XSize / chunk_size
+    )
+    # map of tile index to tile row, col
+    tile_index_map = Dict.empty(key_type=int64, value_type=Tuple((int64, int64)))
+    dummy_tile_edge_cells = TileEdgeCells(np.zeros((1, 1), dtype=np.int32), 0)
+    tile_labels = Dict()
+    tile_labels[(0, 0)] = dummy_tile_edge_cells
+    del tile_labels[(0, 0)]
+
     for dem_tile in raster_chunker(dem_band, chunk_size, 1):
         # Here we use a 1 cell buffer, this differs from the paper.
         # This is done so that there are no 'uncertain' edges, only low and high edges.
@@ -597,41 +664,46 @@ def create_labels_and_graph(
         # perimeter DEM elevation values since we no don't need to identify them later
         fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
         fdr_tile.read(fdr_band)
-        labels_tile_filepath = os.path.join(
-            working_directory, f"labels_{dem_tile.row}_{dem_tile.col}.tif"
-        )
-        labels_tile_ds = create_dataset(
-            labels_tile_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
-        )
-        labels_tile_band = labels_tile_ds.GetRasterBand(1)
-        labels_tile = RasterChunk(0, 0, chunk_size, 0)
-        # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
-        # creating the flat mask and labels
-        to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(
-            dem_tile.data, fdr_tile.data
-        )
-        labels_tile.from_numpy(labels)
-        labels_tile.write(labels_tile_band)
-        labels_tile_band.FlushCache()
-        labels_tile_ds.FlushCache()
-        labels_tile_ds = None
-        labels_tile_band = None
-
-        tile_labels[(dem_tile.row, dem_tile.col)] = TileEdgeCells(labels, tile_index)
-        graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
-            tile_labels[(dem_tile.row, dem_tile.col)],
-            TileEdgeCells(to_higher, tile_index),
-            TileEdgeCells(to_lower, tile_index),
-        )
-        for i, edge in enumerate(graph):
-            global_graph[i] = edge
-        global_perimeter_high_edges += perimeter_high_edges
-        global_perimeter_low_edges += perimeter_low_edges
-        if len(high_edges) > 0:
-            global_interior_high_edges[tile_index] = high_edges
-        if len(low_edges) > 0:
-            global_interior_low_edges[tile_index] = low_edges
+        dem_batch.append(dem_tile.data)
+        fdr_batch.append(fdr_tile.data)
+        batch_tile_indices.append(tile_index)
+        tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
         tile_index += 1
+        if len(dem_batch) == batch_size or tile_index == num_tiles:
+            batch_labels = create_labels_and_graph_process_tile(
+                dem_batch,
+                fdr_batch,
+                batch_tile_indices,
+                chunk_size,
+                perimeter_cells_per_tile,
+                tile_index_map,
+                tile_labels,
+                global_graph,
+                global_perimeter_high_edges,
+                global_perimeter_low_edges,
+                global_interior_high_edges,
+                global_interior_low_edges,
+            )
+            for result_index, labels in zip(batch_tile_indices, batch_labels):
+                tile_row, tile_col = tile_index_map[result_index]
+                labels_tile_filepath = os.path.join(
+                    working_directory, f"labels_{tile_row}_{tile_col}.tif"
+                )
+                labels_tile_ds = create_dataset(
+                    labels_tile_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
+                )
+                labels_tile_band = labels_tile_ds.GetRasterBand(1)
+                labels_tile = RasterChunk(0, 0, chunk_size, 0)
+                labels_tile.from_numpy(labels)
+                labels_tile.write(labels_tile_band)
+                labels_tile_band.FlushCache()
+                labels_tile_ds.FlushCache()
+                labels_tile_ds = None
+                labels_tile_band = None
+            dem_batch = []
+            fdr_batch = []
+            batch_tile_indices = []
+
     mosaic_tiles(
         os.path.join(working_directory, "labels"),
         math.ceil(fdr_band.YSize / chunk_size),
