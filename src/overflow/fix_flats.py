@@ -5,7 +5,7 @@ import math
 import heapq
 import tempfile
 import numpy as np
-from numba import njit, int32
+from numba import njit, int32, prange
 from osgeo import gdal
 from numba.experimental import jitclass
 from numba.typed import List
@@ -132,6 +132,7 @@ def label_flats(
             to_be_filled.push((neighbor_row, neighbor_col))
 
 
+@njit
 def away_from_higher(
     labels: np.ndarray,
     flat_mask: np.ndarray,
@@ -312,7 +313,7 @@ def resolve_flats(
     return flat_mask, labels
 
 
-@njit
+@njit(parallel=True)
 def d8_masked_flow_dirs(
     flat_mask: np.ndarray, fdr: np.ndarray, labels: np.ndarray
 ) -> None:
@@ -338,33 +339,35 @@ def d8_masked_flow_dirs(
     Returns:
         None: The function modifies the fdr array in place.
     """
-    for row, col in np.ndindex(fdr.shape):
-        if fdr[row, col] == FLOW_DIRECTION_NODATA:
-            continue
-        if fdr[row, col] != FLOW_DIRECTION_UNDEFINED:
-            continue
-        nmin = FLOW_DIRECTION_UNDEFINED
-        min_slope = np.inf
-        for i, (d_row, d_col) in enumerate(NEIGHBOR_OFFSETS):
-            neighbor_row = row + d_row
-            neighbor_col = col + d_col
-            if (
-                neighbor_row < 0
-                or neighbor_row >= fdr.shape[0]
-                or neighbor_col < 0
-                or neighbor_col >= fdr.shape[1]
-            ):
+    # pylint: disable=not-an-iterable
+    for row in prange(fdr.shape[0]):
+        for col in range(fdr.shape[1]):
+            if fdr[row, col] == FLOW_DIRECTION_NODATA:
                 continue
-            if labels[neighbor_row, neighbor_col] != labels[row, col]:
+            if fdr[row, col] != FLOW_DIRECTION_UNDEFINED:
                 continue
-            # calculate slope
-            dz = float(flat_mask[neighbor_row, neighbor_col]) - flat_mask[row, col]
-            slope = dz / (math.sqrt(2) if d_row != 0 and d_col != 0 else 1)
-            # update minimum slope
-            if slope < min_slope:
-                min_slope = slope
-                nmin = FLOW_DIRECTIONS[i]
-        fdr[row, col] = nmin
+            nmin = FLOW_DIRECTION_UNDEFINED
+            min_slope = np.inf
+            for i, (d_row, d_col) in enumerate(NEIGHBOR_OFFSETS):
+                neighbor_row = row + d_row
+                neighbor_col = col + d_col
+                if (
+                    neighbor_row < 0
+                    or neighbor_row >= fdr.shape[0]
+                    or neighbor_col < 0
+                    or neighbor_col >= fdr.shape[1]
+                ):
+                    continue
+                if labels[neighbor_row, neighbor_col] != labels[row, col]:
+                    continue
+                # calculate slope
+                dz = float(flat_mask[neighbor_row, neighbor_col]) - flat_mask[row, col]
+                slope = dz / (math.sqrt(2) if d_row != 0 and d_col != 0 else 1)
+                # update minimum slope
+                if slope < min_slope:
+                    min_slope = slope
+                    nmin = FLOW_DIRECTIONS[i]
+            fdr[row, col] = nmin
 
 
 @njit
@@ -473,7 +476,11 @@ def resolve_flats_tile(
 
     label = 1
     # Label flats from low edges and high edges
-    for row, col in low_edges + high_edges:
+    for row, col in low_edges:
+        if labels[row, col] == 0:
+            label_flats(dem, labels, label, row, col)
+            label += 1
+    for row, col in high_edges:
         if labels[row, col] == 0:
             label_flats(dem, labels, label, row, col)
             label += 1
@@ -484,6 +491,113 @@ def resolve_flats_tile(
     dist_to_lower = compute_gradient(labels, flow_dirs, low_edges)
 
     return dist_to_higher, dist_to_lower, labels, high_edges, low_edges
+
+
+@njit
+def get_tile_exterior_edges(min_dist, edge_labels):
+    # get all min_dist elements from this tile
+    tile_min_dist = {
+        k - edge_labels.index_offset: v
+        for k, v in min_dist.items()
+        if k >= edge_labels.index_offset
+        and k < edge_labels.index_offset + edge_labels.size()
+    }
+    # The dictionary is used to group cells by distance from the flat edge
+    # Each loop is a list of cells that are the same distance from the flat edge
+    exterior_edges = List()
+    max_loop = 0
+    loop_index_map = {}
+    index = 0
+    for i, dist in tile_min_dist.items():
+        if dist == 1:
+            continue
+        row, col = edge_labels.get_row_col(i)
+        if dist not in loop_index_map:
+            max_loop = max(max_loop, dist)
+            loop_index_map[dist] = index
+            index += 1
+            exterior_edges.append([(row, col)])
+        else:
+            exterior_edges[loop_index_map[dist]].append((row, col))
+    return exterior_edges, max_loop, loop_index_map
+
+
+@njit
+def away_from_higher_tile(
+    interior_high_edges,
+    exterior_high_edges,
+    loop_index_map,
+    max_high_loop,
+    labels,
+    fdr,
+    flat_mask,
+):
+    interior_high_edges = ResizableFIFOQueue(interior_high_edges)
+    loops = 1
+    marker = (-1, -1)
+    while len(interior_high_edges) > 1 or loops < max_high_loop:
+        row, col = interior_high_edges.pop()
+        if row == marker[0] and col == marker[1]:
+            loops += 1
+            if loops in loop_index_map:
+                for row, col in exterior_high_edges[loop_index_map[loops]]:
+                    interior_high_edges.push((row, col))
+            interior_high_edges.push(marker)
+            continue
+        if flat_mask[row, col] > 0:
+            continue
+        flat_mask[row, col] = loops
+        for neighbor_row, neighbor_col in neighbor_generator(
+            row, col, labels.shape[0], labels.shape[1]
+        ):
+            if (
+                labels[neighbor_row, neighbor_col] == labels[row, col]
+                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
+            ):
+                interior_high_edges.push((neighbor_row, neighbor_col))
+
+
+@njit
+def towards_lower_tile(
+    interior_low_edges,
+    exterior_low_edges,
+    loop_index_map,
+    max_low_loop,
+    labels,
+    fdr,
+    flat_mask,
+):
+    interior_low_edges = ResizableFIFOQueue(interior_low_edges)
+    loops = 1
+    flat_mask *= -1
+    # max_flat_height can be any arbitrary large number
+    # as long as is is greater than the maximum distance
+    # to any high edge cell in the flat
+    max_flat_height = (2**31 - 1) // 2
+    marker = (-1, -1)
+    while len(interior_low_edges) > 1 or loops < max_low_loop:
+        row, col = interior_low_edges.pop()
+        if row == marker[0] and col == marker[1]:
+            loops += 1
+            if loops in loop_index_map:
+                for row, col in exterior_low_edges[loop_index_map[loops]]:
+                    interior_low_edges.push((row, col))
+            interior_low_edges.push(marker)
+            continue
+        if flat_mask[row, col] > 0:
+            continue
+        if flat_mask[row, col] < 0:
+            flat_mask[row, col] += max_flat_height + 2 * loops
+        else:
+            flat_mask[row, col] = 2 * loops
+        for neighbor_row, neighbor_col in neighbor_generator(
+            row, col, labels.shape[0], labels.shape[1]
+        ):
+            if (
+                labels[neighbor_row, neighbor_col] == labels[row, col]
+                and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
+            ):
+                interior_low_edges.push((neighbor_row, neighbor_col))
 
 
 @jitclass(
@@ -988,7 +1102,8 @@ def mosaic_tiles(
     out_band = None
 
 
-def process_tiles(dem_ds, dem_band, fdr_band, chunk_size, working_directory):
+def create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_directory):
+    # TODO: use multiprocessing to parallelize the processing of each tile
     tile_labels = {}
     # setup the numba typed lists, is there a better way?
     global_graph = List()
@@ -1083,6 +1198,131 @@ def process_tiles(dem_ds, dem_band, fdr_band, chunk_size, working_directory):
     )
 
 
+def complete_graph(tile_labels, rows, cols, global_graph):
+    for i in range(rows - 1):
+        for j in range(cols - 1):
+            labels_a = tile_labels[(i, j)]
+            labels_b = tile_labels[(i, j + 1)]
+            labels_c = tile_labels[(i + 1, j)]
+            labels_d = tile_labels[(i + 1, j + 1)]
+            join_adjacent_tiles(
+                labels_a,
+                labels_b,
+                labels_c,
+                labels_d,
+                global_graph,
+            )
+
+
+def create_flat_mask(
+    rows,
+    cols,
+    chunk_size,
+    working_dir,
+    dem_band,
+    dem_ds,
+    fdr_band,
+    tile_labels,
+    global_interior_high_edges,
+    global_interior_low_edges,
+    min_dist_high,
+    min_dist_low,
+):
+    # TODO: use multiprocessing to parallelize the processing of each tile
+    tile_index = 0
+    for tile_row in range(rows):
+        for tile_col in range(cols):
+            fdr_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
+            fdr_tile.read(fdr_band)
+            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
+            fdr = fdr_tile.data
+            labels = read_tile(
+                os.path.join(working_dir, f"labels_{tile_row}_{tile_col}.tif")
+            )
+            flat_mask = np.zeros_like(labels, dtype=np.int32)
+            edge_labels = tile_labels[(tile_row, tile_col)]
+
+            interior_high_edges = global_interior_high_edges[tile_index]
+            exterior_edges, max_high_loop, loop_index_map = get_tile_exterior_edges(
+                min_dist_high, edge_labels
+            )
+            marker = (-1, -1)
+            # append the marker here in case the list is empty so numba can infer the type
+            interior_high_edges.append(marker)
+            away_from_higher_tile(
+                interior_high_edges,
+                exterior_edges,
+                loop_index_map,
+                max_high_loop,
+                labels,
+                fdr,
+                flat_mask,
+            )
+
+            interior_low_edges = global_interior_low_edges[tile_index]
+            exterior_edges, max_low_loop, loop_index_map = get_tile_exterior_edges(
+                min_dist_low, edge_labels
+            )
+            # append the marker here in case the list is empty so numba can infer the type
+            interior_low_edges.append(marker)
+            towards_lower_tile(
+                interior_low_edges,
+                exterior_edges,
+                loop_index_map,
+                max_low_loop,
+                labels,
+                fdr,
+                flat_mask,
+            )
+
+            flat_mask_filepath = os.path.join(
+                working_dir, f"flat_mask_{tile_row}_{tile_col}.tif"
+            )
+            flat_mask_ds, flat_mask_band = create_dataset(
+                flat_mask_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
+            )
+            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
+            flat_mask_tile.from_numpy(flat_mask)
+            flat_mask_tile.write(flat_mask_band)
+            tile_index += 1
+            flat_mask_band.FlushCache()
+            flat_mask_ds.FlushCache()
+            flat_mask_band = None
+            flat_mask_ds = None
+    mosaic_tiles(
+        "flat_mask",
+        math.ceil(dem_band.YSize / chunk_size),
+        math.ceil(dem_band.XSize / chunk_size),
+        chunk_size,
+        os.path.join(working_dir, "flat_mask.tif"),
+        working_dir,
+        0,
+        gdal.GDT_Int32,
+        dem_band.XSize,
+        dem_band.YSize,
+        dem_ds.GetGeoTransform(),
+        dem_ds.GetProjection(),
+    )
+
+
+def update_fdr(dem_ds, dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size):
+    labels_ds, labels_band = open_dataset(
+        os.path.join(working_dir, "labels.tif"), 1, gdal.GA_Update
+    )
+    flat_mask_ds, flat_mask_band = open_dataset(
+        os.path.join(working_dir, "flat_mask.tif"), 1, gdal.GA_ReadOnly
+    )
+    # update fdr using d8_masked_flow_dirs
+    for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
+        labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
+        labels_tile.read(labels_band)
+        flat_mask_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
+        flat_mask_tile.read(flat_mask_band)
+        d8_masked_flow_dirs(flat_mask_tile.data, fdr_tile.data, labels_tile.data)
+        fdr_tile.write(fixed_fdr_band)
+    fixed_fdr_band.FlushCache()
+
+
 def fix_flats(
     dem_filepath: str,
     fdr_filepath: str,
@@ -1117,189 +1357,37 @@ def fix_flats(
         global_perimeter_low_edges,
         global_interior_high_edges,
         global_interior_low_edges,
-    ) = process_tiles(dem_ds, dem_band, fdr_band, chunk_size, working_dir)
+    ) = create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_dir)
 
     num_tile_rows = math.ceil(dem_band.YSize / chunk_size)
     num_tile_cols = math.ceil(dem_band.XSize / chunk_size)
-    for i in range(num_tile_rows - 1):
-        for j in range(num_tile_cols - 1):
-            labels_a = tile_labels[(i, j)]
-            labels_b = tile_labels[(i, j + 1)]
-            labels_c = tile_labels[(i + 1, j)]
-            labels_d = tile_labels[(i + 1, j + 1)]
-            join_adjacent_tiles(
-                labels_a,
-                labels_b,
-                labels_c,
-                labels_d,
-                global_graph,
-            )
+    complete_graph(tile_labels, num_tile_rows, num_tile_cols, global_graph)
 
     min_dist_high = solve_graph(global_graph, global_perimeter_high_edges)
     min_dist_low = solve_graph(global_graph, global_perimeter_low_edges)
+
     # remove low edges from min_dist_high
     # if min_dist_low == 1, the cell is part of a low edge
     for i, dist in min_dist_low.items():
         if dist == 1 and i in min_dist_high:
             del min_dist_high[i]
-    tile_index = 0
-    for tile_row in range(num_tile_rows):
-        for tile_col in range(num_tile_cols):
-            fdr_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
-            fdr_tile.read(fdr_band)
-            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
-            fdr = fdr_tile.data
-            labels = read_tile(
-                os.path.join(working_dir, f"labels_{tile_row}_{tile_col}.tif")
-            )
-            flat_mask = np.zeros_like(labels, dtype=np.int32)
-            edge_labels = tile_labels[(tile_row, tile_col)]
-            # add all interior_high_edges to adjusted_high_edges with value 1
-            adjusted_high_edges = global_interior_high_edges[tile_index]
-            # add all min_dist_high from this tile
-            tile_min_dist_high = {
-                k - edge_labels.index_offset: v
-                for k, v in min_dist_high.items()
-                if k >= edge_labels.index_offset
-                and k < edge_labels.index_offset + edge_labels.size()
-            }
-            # key is loops, value is list of (row, col) tuples
-            adjusted_high_edges_dict = {}
-            max_high_loop = 0
-            for i, dist in tile_min_dist_high.items():
-                if dist == 1:
-                    continue
-                row, col = edge_labels.get_row_col(i)
-                if dist not in adjusted_high_edges_dict:
-                    max_high_loop = max(max_high_loop, dist)
-                    adjusted_high_edges_dict[dist] = []
-                adjusted_high_edges_dict[dist].append((row, col))
-            # away from higher analog
-            marker = (-1, -1)
-            adjusted_high_edges.append(marker)
-            adjusted_high_edges = ResizableFIFOQueue(adjusted_high_edges)
-            loops = 1
-            while len(adjusted_high_edges) > 1 or loops < max_high_loop:
-                row, col = adjusted_high_edges.pop()
-                if row == marker[0] and col == marker[1]:
-                    loops += 1
-                    if loops in adjusted_high_edges_dict:
-                        for row, col in adjusted_high_edges_dict[loops]:
-                            adjusted_high_edges.push((row, col))
-                    adjusted_high_edges.push(marker)
-                    continue
-                if flat_mask[row, col] > 0:
-                    continue
-                flat_mask[row, col] = loops
-                for neighbor_row, neighbor_col in neighbor_generator(
-                    row, col, labels.shape[0], labels.shape[1]
-                ):
-                    if (
-                        labels[neighbor_row, neighbor_col] == labels[row, col]
-                        and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
-                    ):
-                        adjusted_high_edges.push((neighbor_row, neighbor_col))
-            # towards lower analog
-            adjusted_low_edges = global_interior_low_edges[tile_index]
-            tile_min_dist_low = {
-                k - edge_labels.index_offset: v
-                for k, v in min_dist_low.items()
-                if k >= edge_labels.index_offset
-                and k < edge_labels.index_offset + edge_labels.size()
-            }
-            adjusted_low_edges_dict = {}
-            max_low_loop = 0
-            for i, dist in tile_min_dist_low.items():
-                if dist == 1:
-                    continue
-                row, col = edge_labels.get_row_col(i)
-                if dist not in adjusted_low_edges_dict:
-                    max_low_loop = max(max_low_loop, dist)
-                    adjusted_low_edges_dict[dist] = []
-                adjusted_low_edges_dict[dist].append((row, col))
-            adjusted_low_edges.append(marker)
-            adjusted_low_edges = ResizableFIFOQueue(adjusted_low_edges)
-            loops = 1
-            flat_mask *= -1
-            # LARGE_INT = (2**31 - 1) // 2
-            LARGE_INT = 3
-            while len(adjusted_low_edges) > 1 or loops < max_low_loop:
-                row, col = adjusted_low_edges.pop()
-                if row == marker[0] and col == marker[1]:
-                    loops += 1
-                    if loops in adjusted_low_edges_dict:
-                        for row, col in adjusted_low_edges_dict[loops]:
-                            adjusted_low_edges.push((row, col))
-                    adjusted_low_edges.push(marker)
-                    continue
-                if flat_mask[row, col] > 0:
-                    continue
-                if flat_mask[row, col] < 0:
-                    flat_mask[row, col] += LARGE_INT + 2 * loops
-                else:
-                    flat_mask[row, col] = 2 * loops
-                for neighbor_row, neighbor_col in neighbor_generator(
-                    row, col, labels.shape[0], labels.shape[1]
-                ):
-                    if (
-                        labels[neighbor_row, neighbor_col] == labels[row, col]
-                        and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
-                    ):
-                        adjusted_low_edges.push((neighbor_row, neighbor_col))
-            flat_mask_filepath = os.path.join(
-                working_dir, f"flat_mask_{tile_row}_{tile_col}.tif"
-            )
-            flat_mask_ds, flat_mask_band = create_dataset(
-                flat_mask_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
-            )
-            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
-            flat_mask_tile.from_numpy(flat_mask)
-            flat_mask_tile.write(flat_mask_band)
-            tile_index += 1
-            flat_mask_band.FlushCache()
-            flat_mask_ds.FlushCache()
-            flat_mask_band = None
-            flat_mask_ds = None
-    mosaic_tiles(
-        "flat_mask",
-        math.ceil(dem_band.YSize / chunk_size),
-        math.ceil(dem_band.XSize / chunk_size),
+
+    create_flat_mask(
+        num_tile_rows,
+        num_tile_cols,
         chunk_size,
-        os.path.join(working_dir, "flat_mask.tif"),
         working_dir,
-        0,
-        gdal.GDT_Int32,
-        dem_band.XSize,
-        dem_band.YSize,
-        dem_ds.GetGeoTransform(),
-        dem_ds.GetProjection(),
+        dem_band,
+        dem_ds,
+        fdr_band,
+        tile_labels,
+        global_interior_high_edges,
+        global_interior_low_edges,
+        min_dist_high,
+        min_dist_low,
     )
-    labels_ds, labels_band = open_dataset(
-        os.path.join(working_dir, "labels.tif"), 1, gdal.GA_Update
-    )
-    flat_mask_ds, flat_mask_band = open_dataset(
-        os.path.join(working_dir, "flat_mask.tif"), 1, gdal.GA_ReadOnly
-    )
-    # update fdr using d8_masked_flow_dirs
-    for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
-        labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
-        labels_tile.read(labels_band)
-        flat_mask_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
-        flat_mask_tile.read(flat_mask_band)
-        d8_masked_flow_dirs(flat_mask_tile.data, fdr_tile.data, labels_tile.data)
-        fdr_tile.write(fixed_fdr_band)
-    fixed_fdr_band.FlushCache()
-    fixed_fdr_ds.FlushCache()
-    # cleanup
-    dem_band = None
-    fdr_band = None
-    labels_band = None
-    flat_mask_band = None
-    fixed_fdr_band = None
-    dem_ds = None
-    fdr_ds = None
-    labels_ds = None
-    flat_mask_ds = None
-    fixed_fdr_ds = None
+
+    update_fdr(dem_ds, dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size)
+
     if cleanup_working_dir:
         shutil.rmtree(working_dir)
