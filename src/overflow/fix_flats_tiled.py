@@ -564,7 +564,6 @@ def setup_datasets(
 def create_labels_and_graph(
     dem_band, fdr_band, chunk_size, working_directory, geotransform, projection
 ):
-    # TODO: use multiprocessing to parallelize the processing of each tile
     tile_labels = {}
     # setup the numba typed lists, is there a better way?
     global_graph = List()
@@ -778,6 +777,7 @@ def fix_flats(
         # otherwise, we leave it to the caller to clean up
         cleanup_working_dir = True
         working_dir = tempfile.mkdtemp()
+    # setup the input and output datasets
     (
         dem_ds,
         fdr_ds,
@@ -790,6 +790,10 @@ def fix_flats(
     dem_band = dem_ds.GetRasterBand(1)
     fdr_band = fdr_ds.GetRasterBand(1)
     fixed_fdr_band = fixed_fdr_ds.GetRasterBand(1)
+    num_tile_rows = math.ceil(dem_band.YSize / chunk_size)
+    num_tile_cols = math.ceil(dem_band.XSize / chunk_size)
+
+    # create labels and graph for each tile
     (
         tile_labels,
         global_graph,
@@ -806,15 +810,16 @@ def fix_flats(
         dem_ds.GetProjection(),
     )
 
-    num_tile_rows = math.ceil(dem_band.YSize / chunk_size)
-    num_tile_cols = math.ceil(dem_band.XSize / chunk_size)
+    # complete the graph by connecting the neighboring tiles
     complete_graph(tile_labels, num_tile_rows, num_tile_cols, global_graph)
 
+    # solve the graph for the low and high terrain nodes
     min_dist_low = solve_low_graph(global_graph, global_perimeter_low_edges)
     min_dist_high = solve_high_graph(
         global_graph, global_perimeter_high_edges, min_dist_low
     )
 
+    # create the flat mask for each tile
     create_flat_mask(
         num_tile_rows,
         num_tile_cols,
@@ -830,6 +835,7 @@ def fix_flats(
         min_dist_low,
     )
 
+    # update the flow direction raster
     update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size)
 
     if cleanup_working_dir:
