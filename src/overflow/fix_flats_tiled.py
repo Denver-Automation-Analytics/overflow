@@ -14,6 +14,10 @@ from .util.raster import (
     Side,
     Corner,
     TileEdgeCells,
+    open_dataset,
+    create_dataset,
+    read_tile,
+    mosaic_tiles,
 )
 from .fix_flats import flat_edges, label_flats, d8_masked_flow_dirs
 from .constants import (
@@ -113,6 +117,21 @@ def resolve_flats_tile(
     # Find flat edges, this will not result in any uncertain edges
     # because we are processing with a 1 cell buffer
     high_edges, low_edges = flat_edges(dem, flow_dirs)
+
+    # remove buffer from dem and flow_dirs since we now have the edges
+    dem = dem[1:-1, 1:-1]
+    flow_dirs = flow_dirs[1:-1, 1:-1]
+    # remove high and low edges from outside the tile
+    high_edges = [
+        (row - 1, col - 1)
+        for row, col in high_edges
+        if row != 0 and row != dem.shape[0] + 1 and col != 0 and col != dem.shape[1] + 1
+    ]
+    low_edges = [
+        (row - 1, col - 1)
+        for row, col in low_edges
+        if row != 0 and row != dem.shape[0] + 1 and col != 0 and col != dem.shape[1] + 1
+    ]
 
     # if the tile is entirely flat, set labels to 1 and return zero gradients
     if (
@@ -453,7 +472,7 @@ def join_adjacent_tiles(
 
 
 @njit
-def solve_graph(global_graph: list, terrain_edges: list):
+def solve_low_graph(global_graph: list, terrain_edges: list):
     min_dist = {}
     # using djikstra's algorithm, find the minimum distance to all cells on the perimeter
     # from terrain_edges which is a single node connecting all flat edge cells to the high terrain node
@@ -480,55 +499,53 @@ def solve_graph(global_graph: list, terrain_edges: list):
     return min_dist
 
 
-def open_dataset(filepath, band_number=1, access=gdal.GA_ReadOnly):
-    dataset = gdal.Open(filepath, access)
-    if dataset is None:
-        raise ValueError(f"Unable to open dataset: {filepath}")
-    band = dataset.GetRasterBand(band_number)
-    return dataset, band
-
-
-def create_dataset(
-    filepath,
-    nodata_value,
-    data_type,
-    x_size,
-    y_size,
-    geotransform=None,
-    projection=None,
-    num_bands=1,
-):
-    driver = gdal.GetDriverByName("GTiff")
-    dataset = driver.Create(
-        filepath,
-        x_size,
-        y_size,
-        num_bands,
-        data_type,
-        options=["COMPRESS=LZW"],
-    )
-    if geotransform:
-        dataset.SetGeoTransform(geotransform)
-    if projection:
-        dataset.SetProjection(projection)
-    band = dataset.GetRasterBand(1)
-    band.SetNoDataValue(nodata_value)
-    return dataset, band
+@njit
+def solve_high_graph(global_graph: list, terrain_edges: list, min_dist_low: dict):
+    min_dist = {}
+    # using djikstra's algorithm, find the minimum distance to all cells on the perimeter
+    # from terrain_edges which is a single node connecting all flat edge cells to the high terrain node
+    # The result in min_dist will be the minimum distance to all cells in the graph
+    # from the terrain node
+    pq = []
+    pq.append((0, 0))
+    pq.pop()
+    # populate pq with the terrain node and its neighbors
+    for neighbor, weight in terrain_edges:
+        # ignore low edge cells
+        if neighbor in min_dist_low and min_dist_low[neighbor] == 1:
+            continue
+        min_dist[neighbor] = weight
+        heapq.heappush(pq, (weight, neighbor))
+    while pq:
+        dist, node = heapq.heappop(pq)
+        if dist > min_dist[node]:
+            continue
+        for neighbor, weight in global_graph[node]:
+            # ignore low edge cells
+            if neighbor in min_dist_low and min_dist_low[neighbor] == 1:
+                continue
+            if neighbor not in min_dist:
+                min_dist[neighbor] = dist + weight
+                heapq.heappush(pq, (dist + weight, neighbor))
+            elif dist + weight < min_dist[neighbor]:
+                min_dist[neighbor] = dist + weight
+                heapq.heappush(pq, (dist + weight, neighbor))
+    return min_dist
 
 
 def setup_datasets(
     dem_filepath: str,
     fdr_filepath: str,
-    working_dir: str,
     fixed_fdr_filepath: str,
 ):
-    dem_ds, dem_band = open_dataset(dem_filepath)
-    fdr_ds, fdr_band = open_dataset(fdr_filepath)
+    dem_ds = open_dataset(dem_filepath)
+    fdr_ds = open_dataset(fdr_filepath)
+    dem_band = dem_ds.GetRasterBand(1)
     x_size = dem_band.XSize
     y_size = dem_band.YSize
     geotransform = dem_ds.GetGeoTransform()
     projection = dem_ds.GetProjection()
-    fixed_fdr_ds, fixed_fdr_band = create_dataset(
+    fixed_fdr_ds = create_dataset(
         fixed_fdr_filepath,
         FLOW_DIRECTION_NODATA,
         gdal.GDT_Byte,
@@ -539,56 +556,14 @@ def setup_datasets(
     )
     return (
         dem_ds,
-        dem_band,
         fdr_ds,
-        fdr_band,
         fixed_fdr_ds,
-        fixed_fdr_band,
     )
 
 
-def read_tile(filepath: str):
-    dataset, band = open_dataset(filepath)
-    return band.ReadAsArray()
-
-
-def mosaic_tiles(
-    prefix,
-    rows,
-    cols,
-    chunk_size,
-    output_filepath,
-    working_dir,
-    nodata_value,
-    data_type,
-    x_size,
-    y_size,
-    geotransform,
-    projection,
+def create_labels_and_graph(
+    dem_band, fdr_band, chunk_size, working_directory, geotransform, projection
 ):
-    out_ds, out_band = create_dataset(
-        output_filepath,
-        nodata_value,
-        data_type,
-        x_size,
-        y_size,
-        geotransform,
-        projection,
-    )
-    for row in range(rows):
-        for col in range(cols):
-            tile_filepath = os.path.join(working_dir, f"{prefix}_{row}_{col}.tif")
-            tile = read_tile(tile_filepath)
-            chunk = RasterChunk(row, col, chunk_size, 0)
-            chunk.from_numpy(tile)
-            chunk.write(out_band)
-    out_band.FlushCache()
-    out_ds.FlushCache()
-    out_ds = None
-    out_band = None
-
-
-def create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_directory):
     # TODO: use multiprocessing to parallelize the processing of each tile
     tile_labels = {}
     # setup the numba typed lists, is there a better way?
@@ -616,10 +591,11 @@ def create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_dire
         labels_tile_filepath = os.path.join(
             working_directory, f"labels_{dem_tile.row}_{dem_tile.col}.tif"
         )
-        labels_tile_ds, labels_tile_band = create_dataset(
+        labels_tile_ds = create_dataset(
             labels_tile_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
         )
-        labels_tile = RasterChunk(0, 0, chunk_size, 1)
+        labels_tile_band = labels_tile_ds.GetRasterBand(1)
+        labels_tile = RasterChunk(0, 0, chunk_size, 0)
         # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
         # creating the flat mask and labels
         to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(
@@ -631,21 +607,7 @@ def create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_dire
         labels_tile_ds.FlushCache()
         labels_tile_ds = None
         labels_tile_band = None
-        # remove buffer and create the tile edge data
-        to_higher = to_higher[1:-1, 1:-1]
-        to_lower = to_lower[1:-1, 1:-1]
-        labels = labels[1:-1, 1:-1]
-        # remove high and low edges from the perimeter in the buffer
-        high_edges = [
-            (row - 1, col - 1)
-            for row, col in high_edges
-            if row != 0 and row != chunk_size + 1 and col != 0 and col != chunk_size + 1
-        ]
-        low_edges = [
-            (row - 1, col - 1)
-            for row, col in low_edges
-            if row != 0 and row != chunk_size + 1 and col != 0 and col != chunk_size + 1
-        ]
+
         tile_labels[(dem_tile.row, dem_tile.col)] = TileEdgeCells(labels, tile_index)
         graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
             tile_labels[(dem_tile.row, dem_tile.col)],
@@ -659,18 +621,16 @@ def create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_dire
         global_interior_high_edges.append(high_edges)
         global_interior_low_edges.append(low_edges)
     mosaic_tiles(
-        "labels",
-        math.ceil(dem_band.YSize / chunk_size),
-        math.ceil(dem_band.XSize / chunk_size),
-        chunk_size,
+        os.path.join(working_directory, "labels"),
+        math.ceil(fdr_band.YSize / chunk_size),
+        math.ceil(fdr_band.XSize / chunk_size),
         os.path.join(working_directory, "labels.tif"),
-        working_directory,
         0,
         gdal.GDT_Int32,
-        dem_band.XSize,
-        dem_band.YSize,
-        dem_ds.GetGeoTransform(),
-        dem_ds.GetProjection(),
+        fdr_band.XSize,
+        fdr_band.YSize,
+        geotransform,
+        projection,
     )
     return (
         tile_labels,
@@ -762,9 +722,10 @@ def create_flat_mask(
             flat_mask_filepath = os.path.join(
                 working_dir, f"flat_mask_{tile_row}_{tile_col}.tif"
             )
-            flat_mask_ds, flat_mask_band = create_dataset(
+            flat_mask_ds = create_dataset(
                 flat_mask_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
             )
+            flat_mask_band = flat_mask_ds.GetRasterBand(1)
             flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
             flat_mask_tile.from_numpy(flat_mask)
             flat_mask_tile.write(flat_mask_band)
@@ -774,12 +735,10 @@ def create_flat_mask(
             flat_mask_band = None
             flat_mask_ds = None
     mosaic_tiles(
-        "flat_mask",
+        os.path.join(working_dir, "flat_mask"),
         math.ceil(dem_band.YSize / chunk_size),
         math.ceil(dem_band.XSize / chunk_size),
-        chunk_size,
         os.path.join(working_dir, "flat_mask.tif"),
-        working_dir,
         0,
         gdal.GDT_Int32,
         dem_band.XSize,
@@ -789,13 +748,11 @@ def create_flat_mask(
     )
 
 
-def update_fdr(dem_ds, dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size):
-    labels_ds, labels_band = open_dataset(
-        os.path.join(working_dir, "labels.tif"), 1, gdal.GA_Update
-    )
-    flat_mask_ds, flat_mask_band = open_dataset(
-        os.path.join(working_dir, "flat_mask.tif"), 1, gdal.GA_ReadOnly
-    )
+def update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size):
+    labels_ds = open_dataset(os.path.join(working_dir, "labels.tif"))
+    labels_band = labels_ds.GetRasterBand(1)
+    flat_mask_ds = open_dataset(os.path.join(working_dir, "flat_mask.tif"))
+    flat_mask_band = flat_mask_ds.GetRasterBand(1)
     # update fdr using d8_masked_flow_dirs
     for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
         labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
@@ -823,17 +780,16 @@ def fix_flats(
         working_dir = tempfile.mkdtemp()
     (
         dem_ds,
-        dem_band,
         fdr_ds,
-        fdr_band,
         fixed_fdr_ds,
-        fixed_fdr_band,
     ) = setup_datasets(
         dem_filepath,
         fdr_filepath,
-        working_dir,
         output_filepath,
     )
+    dem_band = dem_ds.GetRasterBand(1)
+    fdr_band = fdr_ds.GetRasterBand(1)
+    fixed_fdr_band = fixed_fdr_ds.GetRasterBand(1)
     (
         tile_labels,
         global_graph,
@@ -841,20 +797,23 @@ def fix_flats(
         global_perimeter_low_edges,
         global_interior_high_edges,
         global_interior_low_edges,
-    ) = create_labels_and_graph(dem_ds, dem_band, fdr_band, chunk_size, working_dir)
+    ) = create_labels_and_graph(
+        dem_band,
+        fdr_band,
+        chunk_size,
+        working_dir,
+        dem_ds.GetGeoTransform(),
+        dem_ds.GetProjection(),
+    )
 
     num_tile_rows = math.ceil(dem_band.YSize / chunk_size)
     num_tile_cols = math.ceil(dem_band.XSize / chunk_size)
     complete_graph(tile_labels, num_tile_rows, num_tile_cols, global_graph)
 
-    min_dist_high = solve_graph(global_graph, global_perimeter_high_edges)
-    min_dist_low = solve_graph(global_graph, global_perimeter_low_edges)
-
-    # remove low edges from min_dist_high
-    # if min_dist_low == 1, the cell is part of a low edge
-    for i, dist in min_dist_low.items():
-        if dist == 1 and i in min_dist_high:
-            del min_dist_high[i]
+    min_dist_low = solve_low_graph(global_graph, global_perimeter_low_edges)
+    min_dist_high = solve_high_graph(
+        global_graph, global_perimeter_high_edges, min_dist_low
+    )
 
     create_flat_mask(
         num_tile_rows,
@@ -871,7 +830,7 @@ def fix_flats(
         min_dist_low,
     )
 
-    update_fdr(dem_ds, dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size)
+    update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size)
 
     if cleanup_working_dir:
         shutil.rmtree(working_dir)

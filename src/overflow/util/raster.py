@@ -1,4 +1,5 @@
 from enum import Enum
+import os
 from typing import Generator, Any
 from osgeo import gdal
 import numpy as np
@@ -213,15 +214,13 @@ def raster_chunker(
             progress_bar.update(1)
 
 
-# Define the Numba specification for the GridCell jitclass
-spec = [
-    ("row", int64),
-    ("column", int64),
-    ("cost", float32),
-]
-
-
-@jitclass(spec)
+@jitclass(
+    [
+        ("row", int64),
+        ("column", int64),
+        ("cost", float32),
+    ]
+)
 class GridCell:
     """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
 
@@ -239,6 +238,11 @@ class GridCell:
 
 
 class Side(Enum):
+    """
+    An enumeration representing the sides of a 2D array (tile).
+    Used to join tiles together along their edges.
+    """
+
     TOP = 1
     RIGHT = 2
     BOTTOM = 3
@@ -246,6 +250,11 @@ class Side(Enum):
 
 
 class Corner(Enum):
+    """
+    An enumeration representing the corners of a 2D array (tile).
+    Used to join tiles together at their corners.
+    """
+
     TOP_LEFT = 1
     TOP_RIGHT = 2
     BOTTOM_RIGHT = 3
@@ -270,6 +279,7 @@ class TileEdgeCells:
     Attributes:
         rows (int): The number of rows in the original 2D array.
         cols (int): The number of columns in the original 2D array.
+        index_offset (int): The offset to add to the flattened index to get the index in the global array
         perimeter (np.ndarray): A 1D contiguous array containing the flattened perimeter cells.
     """
 
@@ -352,15 +362,6 @@ class TileEdgeCells:
     def get_side(self, side: Side):
         """
         Returns the cells on the specified side of the perimeter.
-
-        Args:
-            side (Side): The side of the perimeter.
-
-        Returns:
-            np.ndarray: A contiguous array containing the cells on the specified side.
-
-        Raises:
-            ValueError: If an invalid side is specified.
         """
         if side == Side.TOP:
             # The enitire top edge (from left to right) includes the corners
@@ -389,12 +390,6 @@ class TileEdgeCells:
     def get_corner(self, corner: Corner):
         """
         Returns the cell at the specified corner of the perimeter.
-
-        Args:
-            corner (Corner): The corner of the perimeter.
-
-        Returns:
-            int: The cell value at the specified corner.
         """
         return self.perimeter[self.get_index_corner(corner)]
 
@@ -407,13 +402,6 @@ class TileEdgeCells:
         Returns the Chebyshev distance between two cells specified by their flattened indices.
 
         The Chebyshev distance is the maximum of the absolute differences between the row and column coordinates.
-
-        Args:
-            index (int): The flattened index of the first cell.
-            other_index (int): The flattened index of the second cell.
-
-        Returns:
-            int: The Chebyshev distance between the two cells.
         """
         from_row, from_col = self.get_row_col(index)
         to_row, to_col = self.get_row_col(other_index)
@@ -454,3 +442,134 @@ def neighbor_generator(row, col, n_row, n_col):
         if not_in_bounds:
             continue
         yield neighbor_row, neighbor_col
+
+
+def open_dataset(filepath: str, access: int = gdal.GA_ReadOnly) -> gdal.Dataset:
+    """
+    Opens a raster dataset and returns the dataset and specified band.
+
+    Args:
+        filepath (str): The path to the raster file.
+        band_number (int, optional): The band number to open (default is 1).
+        access (int, optional): The access mode for opening the dataset (default is gdal.GA_ReadOnly).
+
+    Returns:
+        gdal.Dataset: the opened dataset (gdal.Dataset)
+
+    Raises:
+        ValueError: If unable to open the dataset.
+    """
+    dataset = gdal.Open(filepath, access)
+    if dataset is None:
+        raise ValueError(f"Unable to open dataset: {filepath}")
+    return dataset
+
+
+def create_dataset(
+    filepath: str,
+    nodata_value: float | int,
+    data_type: int,
+    x_size: int,
+    y_size: int,
+    geotransform: tuple = None,
+    projection: str = None,
+) -> gdal.Dataset:
+    """
+    Creates a new raster dataset with the specified parameters using LZW compression.
+
+    Args:
+        filepath (str): The path to save the created dataset.
+        nodata_value (float|int): The value to use for representing nodata pixels.
+        data_type (int): The data type of the raster dataset (e.g., gdal.GDT_Float32).
+        x_size (int): The width of the raster dataset in pixels.
+        y_size (int): The height of the raster dataset in pixels.
+        geotransform (tuple, optional): The geotransform parameters for the dataset (default is None).
+        projection (str, optional): The projection information for the dataset (default is None).
+        num_bands (int, optional): The number of bands in the dataset (default is 1).
+
+    Returns:
+        gdal.Dataset: the created dataset
+    """
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(
+        filepath,
+        x_size,
+        y_size,
+        1,
+        data_type,
+        options=["COMPRESS=LZW"],
+    )
+    if geotransform:
+        dataset.SetGeoTransform(geotransform)
+    if projection:
+        dataset.SetProjection(projection)
+    band = dataset.GetRasterBand(1)
+    band.SetNoDataValue(nodata_value)
+    return dataset
+
+
+def read_tile(filepath: str):
+    """
+    Reads a raster tile from the specified file path and returns its data as a numpy array.
+
+    Args:
+        filepath (str): The path to the raster tile file.
+
+    Returns:
+        numpy.ndarray: The raster tile data as a numpy array.
+    """
+    ds = open_dataset(filepath)
+    band = ds.GetRasterBand(1)
+    return band.ReadAsArray()
+
+
+def mosaic_tiles(
+    prefix: str,
+    rows: int,
+    cols: int,
+    output_filepath: str,
+    nodata_value: float | int,
+    data_type: int,
+    x_size: int,
+    y_size: int,
+    geotransform: tuple,
+    projection: str,
+):
+    """
+    Mosaics multiple raster tiles into a single raster dataset.
+
+    Args:
+        prefix (str): The prefix of the tile filepaths. '_{row}_{col}.tif' will be appended to the prefix
+            for every row, col in given number of rows and columns.
+        rows (int): The number of rows in the tile grid.
+        cols (int): The number of columns in the tile grid.
+        output_filepath (str): The path to save the mosaicked raster dataset.
+        nodata_value (float|int): The value to use for representing nodata pixels.
+        data_type (int): The data type of the output raster dataset (e.g., gdal.GDT_Float32).
+        x_size (int): The width of the output raster dataset in pixels.
+        y_size (int): The height of the output raster dataset in pixels.
+        geotransform (tuple): The geotransform parameters for the output dataset.
+        projection (str): The projection information for the output dataset.
+    """
+    out_ds = create_dataset(
+        output_filepath,
+        nodata_value,
+        data_type,
+        x_size,
+        y_size,
+        geotransform,
+        projection,
+    )
+    out_band = out_ds.GetRasterBand(1)
+    for row in range(rows):
+        for col in range(cols):
+            tile_filepath = f"{prefix}_{row}_{col}.tif"
+            tile = read_tile(tile_filepath)
+            chunk_size = tile.shape[0]
+            chunk = RasterChunk(row, col, chunk_size, 0)
+            chunk.from_numpy(tile)
+            chunk.write(out_band)
+    out_band.FlushCache()
+    out_ds.FlushCache()
+    out_ds = None
+    out_band = None

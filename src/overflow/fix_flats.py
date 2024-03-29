@@ -15,9 +15,13 @@ from .util.numba_datastructures import Queue
 def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     """Algorithm 3 FlatEdges: This function locates flat cells which border on
     higher and lower terrain and places them into queues for further processing,
-    as described in §2.2. Upon entry, (1) DEM contains the elevations of every cell
-    or a value NoData for cells not part of the DEM. (2) Any cell without a local
-    gradient is marked NoFlow in FlowDirs. At exit:
+    as described in §2.2.
+    Upon entry:
+    (1) DEM contains the elevations of every cell
+    or a value NoData for cells not part of the DEM.
+    (2) Any cell without a local
+    gradient is marked NoFlow in FlowDirs.
+    At exit:
     (1) high_edges contains all the high edge cells (those flat cells adjacent to
     higher terrain) of the DEM, in no particular order.
     (2) low_edges contains all the low edge cells of the DEM, in no particular order.
