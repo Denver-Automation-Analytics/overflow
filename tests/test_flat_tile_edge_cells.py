@@ -1,11 +1,11 @@
 import pytest
 import numpy as np
-from overflow.fix_flats import FlatTileEdgeCells, Side, Corner
+from overflow.util.raster import TileEdgeCells, Side, Corner
 
 
 @pytest.fixture(name="test_edge_cells")
 def fixture_test_edge_cells():
-    """Create a sample FlatTileEdgeCells for testing."""
+    """Create a sample TileEdgeCells for testing."""
     array = np.array(
         [
             [0, 1, 2, 3, 4, 5],
@@ -15,7 +15,7 @@ def fixture_test_edge_cells():
         ],
         dtype=np.int32,
     )
-    return FlatTileEdgeCells(array, 0)
+    return TileEdgeCells(array, 0)
 
 
 @pytest.fixture(name="test_perimeter_indices")

@@ -1,8 +1,9 @@
-from typing import Iterator
+from enum import Enum
+from typing import Generator, Any
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
-from numba import int64, float32, njit
+from numba import int64, float32, njit, int32
 from numba.experimental import jitclass
 from overflow.constants import NEIGHBOR_OFFSETS
 
@@ -175,7 +176,7 @@ def raster_chunker(
     band: gdal.Band,
     chunk_size: int,
     chunk_buffer_size: int,
-) -> Iterator[RasterChunk]:
+) -> Generator[RasterChunk, Any, None]:
     """Generator that yields chunks of a raster.
 
     Args:
@@ -186,18 +187,18 @@ def raster_chunker(
         buffer_col_size (int): The number of columns in the buffer region.
 
     Yields:
-        Iterator[Tuple[int, int, np.ndarray]]: An iterator that yields tuples. Each tuple contains
-        the buffered chunk of the raster band as a numpy array, the x offset of the chunk, the y offset of the chunk,
-        the number of columns in the chunk, and the number of rows in the chunk.
+        Generator[RasterChunk]: A generator that yields a RasterChunk.
     """
     # Calculate the number of chunks in each dimension
     n_chunks_row = (band.YSize + chunk_size - 1) // chunk_size
     n_chunks_col = (band.XSize + chunk_size - 1) // chunk_size
+    # Calculate the total number of chunks
+    total_chunks = n_chunks_row * n_chunks_col
+    # Create a tqdm progress bar
+    progress_bar = tqdm(total=total_chunks, desc="Processing raster chunks")
     # Iterate over the chunks
 
-    for chunk_row in tqdm(
-        range(n_chunks_row), desc=f"Processing {n_chunks_row} raster chunks"
-    ):
+    for chunk_row in range(n_chunks_row):
         for chunk_col in range(n_chunks_col):
             # Read the chunk and yield it
             chunk = RasterChunk(
@@ -208,6 +209,8 @@ def raster_chunker(
             )
             chunk.read(band)
             yield chunk
+            # Update the progress bar
+            progress_bar.update(1)
 
 
 # Define the Numba specification for the GridCell jitclass
@@ -233,6 +236,188 @@ class GridCell:
 
     def __eq__(self, other):
         return self.cost == other.cost
+
+
+class Side(Enum):
+    TOP = 1
+    RIGHT = 2
+    BOTTOM = 3
+    LEFT = 4
+
+
+class Corner(Enum):
+    TOP_LEFT = 1
+    TOP_RIGHT = 2
+    BOTTOM_RIGHT = 3
+    BOTTOM_LEFT = 4
+
+
+@jitclass(
+    [
+        ("rows", int32),
+        ("cols", int32),
+        ("index_offset", int32),
+        ("perimeter", int32[:]),
+    ]
+)
+class TileEdgeCells:
+    """
+    A class representing the cells on the perimeter of a 2D array (tile).
+
+    The perimeter cells are stored in a flattened 1D array in a clockwise order
+    starting from the top-left corner.
+
+    Attributes:
+        rows (int): The number of rows in the original 2D array.
+        cols (int): The number of columns in the original 2D array.
+        perimeter (np.ndarray): A 1D contiguous array containing the flattened perimeter cells.
+    """
+
+    def __init__(self, array: np.ndarray, tile_index: int):
+        self.rows = len(array)
+        self.cols = len(array[0])
+        self.perimeter = np.empty(2 * (self.rows + self.cols) - 4, dtype=array.dtype)
+
+        # Fill the perimeter array
+        self.perimeter[: self.cols] = array[0]  # top
+        self.perimeter[self.cols : self.cols + self.rows - 2] = array[1:-1, -1]  # right
+        self.perimeter[self.cols + self.rows - 2 : 2 * self.cols + self.rows - 2] = (
+            array[-1, ::-1]
+        )  # bottom
+        self.perimeter[2 * self.cols + self.rows - 2 :] = array[-2:0:-1, 0]  # left
+        self.index_offset = tile_index * self.perimeter.size
+
+    def get_index(self, row, col):
+        """
+        Returns the flattened index of the cell at the given (row, col) coordinates.
+        """
+        if row == 0:
+            return col
+        elif row == self.rows - 1:
+            return self.cols + self.rows - 2 + self.cols - col - 1
+        elif col == self.cols - 1:
+            return self.cols + row - 1
+        else:
+            return 2 * self.cols + self.rows - 2 + self.rows - row - 2
+
+    def get_index_corner(self, corner: Corner):
+        """
+        Returns the flattened index of the cell at the specified corner.
+        """
+        if corner == Corner.TOP_LEFT:
+            return self.get_index(0, 0)
+        elif corner == Corner.TOP_RIGHT:
+            return self.get_index(0, self.cols - 1)
+        elif corner == Corner.BOTTOM_RIGHT:
+            return self.get_index(self.rows - 1, self.cols - 1)
+        elif corner == Corner.BOTTOM_LEFT:
+            return self.get_index(self.rows - 1, 0)
+        else:
+            raise ValueError("Invalid corner")
+
+    def get_index_side(self, side: Side, index: int):
+        """
+        Returns the flattened index of the cell at the specified side and index.
+        """
+        if side == Side.TOP:
+            return self.get_index(0, index)
+        elif side == Side.RIGHT:
+            return self.get_index(index, self.cols - 1)
+        elif side == Side.BOTTOM:
+            return self.get_index(self.rows - 1, index)
+        elif side == Side.LEFT:
+            return self.get_index(index, 0)
+        else:
+            raise ValueError("Invalid side")
+
+    def get_row_col(self, index):
+        """
+        Returns the (row, col) coordinates of the cell at the given flattened index.
+        """
+        if index < self.cols:
+            return 0, index
+        elif index < self.cols + self.rows - 1:
+            return index - self.cols + 1, self.cols - 1
+        elif index < 2 * self.cols + self.rows - 2:
+            return self.rows - 1, 2 * self.cols + self.rows - index - 3
+        else:
+            return 2 * self.cols + 2 * self.rows - index - 4, 0
+
+    def size(self):
+        """
+        Returns the total number of cells in the perimeter.
+        """
+        return self.perimeter.size
+
+    def get_side(self, side: Side):
+        """
+        Returns the cells on the specified side of the perimeter.
+
+        Args:
+            side (Side): The side of the perimeter.
+
+        Returns:
+            np.ndarray: A contiguous array containing the cells on the specified side.
+
+        Raises:
+            ValueError: If an invalid side is specified.
+        """
+        if side == Side.TOP:
+            # The enitire top edge (from left to right) includes the corners
+            return self.perimeter[: self.cols]
+        elif side == Side.RIGHT:
+            # The enitire right edge (from top to bottom) includes the corners
+            return self.perimeter[self.cols - 1 : self.cols + self.rows - 1]
+        elif side == Side.BOTTOM:
+            # The enitire bottom edge (from left to right) includes the corners
+            return self.perimeter[
+                self.cols + self.rows - 2 : 2 * self.cols + self.rows - 2
+            ][
+                ::-1
+            ]  # reversed from internal representation
+        elif side == Side.LEFT:
+            # The entire left edge (from bottom to top) includes the corners
+            indices = np.empty(self.rows, dtype=np.int32)
+            indices[0] = 0
+            indices[1:] = np.arange(
+                self.perimeter.size - 1, self.perimeter.size - self.rows, -1
+            )
+            return self.perimeter[indices]
+        else:
+            raise ValueError("Invalid side")
+
+    def get_corner(self, corner: Corner):
+        """
+        Returns the cell at the specified corner of the perimeter.
+
+        Args:
+            corner (Corner): The corner of the perimeter.
+
+        Returns:
+            int: The cell value at the specified corner.
+        """
+        return self.perimeter[self.get_index_corner(corner)]
+
+    def distance(
+        self,
+        index: int,
+        other_index: int,
+    ) -> int:
+        """
+        Returns the Chebyshev distance between two cells specified by their flattened indices.
+
+        The Chebyshev distance is the maximum of the absolute differences between the row and column coordinates.
+
+        Args:
+            index (int): The flattened index of the first cell.
+            other_index (int): The flattened index of the second cell.
+
+        Returns:
+            int: The Chebyshev distance between the two cells.
+        """
+        from_row, from_col = self.get_row_col(index)
+        to_row, to_col = self.get_row_col(other_index)
+        return max(abs(from_row - to_row), abs(from_col - to_col))
 
 
 @njit

@@ -8,8 +8,8 @@ from overflow.fix_flats import (
     towards_lower,
     resolve_flats,
     d8_masked_flow_dirs,
-    fix_flats,
 )
+from overflow.fix_flats_tiled import fix_flats
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_NODATA,

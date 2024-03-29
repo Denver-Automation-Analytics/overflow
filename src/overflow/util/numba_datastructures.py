@@ -10,7 +10,7 @@ spec = [
 
 
 @jitclass(spec)
-class ResizableFIFOQueue:
+class Queue:
     """
     A resizable First-In-First-Out (FIFO) queue implemented with a circular buffer.
     The complexity of the push and pop operations is amortized O(1) due to the occasional resizing.
