@@ -239,6 +239,7 @@ def away_from_higher_tile(
                 interior_high_edges.push((neighbor_row, neighbor_col))
 
 
+@njit
 def towards_lower_tile(
     interior_low_edges,
     exterior_low_edges,
@@ -571,7 +572,7 @@ def setup_datasets(
 
 
 @njit(parallel=True)
-def create_labels_and_graph_process_tile(
+def create_labels_and_graph_process_batch(
     dem_list,
     fdr_list,
     tile_indices,
@@ -657,6 +658,18 @@ def create_labels_and_graph(
     tile_labels[(0, 0)] = dummy_tile_edge_cells
     del tile_labels[(0, 0)]
 
+    labels_tile_filepath = os.path.join(working_directory, "labels.tif")
+    labels_tile_ds = create_dataset(
+        labels_tile_filepath,
+        0,
+        gdal.GDT_Int32,
+        dem_band.XSize,
+        dem_band.YSize,
+        geotransform,
+        projection,
+    )
+    labels_tile_band = labels_tile_ds.GetRasterBand(1)
+
     for dem_tile in raster_chunker(dem_band, chunk_size, 1):
         # Here we use a 1 cell buffer, this differs from the paper.
         # This is done so that there are no 'uncertain' edges, only low and high edges.
@@ -670,7 +683,7 @@ def create_labels_and_graph(
         tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
         tile_index += 1
         if len(dem_batch) == batch_size or tile_index == num_tiles:
-            batch_labels = create_labels_and_graph_process_tile(
+            batch_labels = create_labels_and_graph_process_batch(
                 dem_batch,
                 fdr_batch,
                 batch_tile_indices,
@@ -686,36 +699,17 @@ def create_labels_and_graph(
             )
             for result_index, labels in zip(batch_tile_indices, batch_labels):
                 tile_row, tile_col = tile_index_map[result_index]
-                labels_tile_filepath = os.path.join(
-                    working_directory, f"labels_{tile_row}_{tile_col}.tif"
-                )
-                labels_tile_ds = create_dataset(
-                    labels_tile_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
-                )
-                labels_tile_band = labels_tile_ds.GetRasterBand(1)
-                labels_tile = RasterChunk(0, 0, chunk_size, 0)
+                labels_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
                 labels_tile.from_numpy(labels)
                 labels_tile.write(labels_tile_band)
-                labels_tile_band.FlushCache()
-                labels_tile_ds.FlushCache()
-                labels_tile_ds = None
-                labels_tile_band = None
             dem_batch = []
             fdr_batch = []
             batch_tile_indices = []
 
-    mosaic_tiles(
-        os.path.join(working_directory, "labels"),
-        math.ceil(fdr_band.YSize / chunk_size),
-        math.ceil(fdr_band.XSize / chunk_size),
-        os.path.join(working_directory, "labels.tif"),
-        0,
-        gdal.GDT_Int32,
-        fdr_band.XSize,
-        fdr_band.YSize,
-        geotransform,
-        projection,
-    )
+    labels_tile_band.FlushCache()
+    labels_tile_ds.FlushCache()
+    labels_tile_ds = None
+    labels_tile_band = None
     return (
         tile_labels,
         global_graph,
@@ -742,6 +736,59 @@ def complete_graph(tile_labels, rows, cols, global_graph):
             )
 
 
+@njit(parallel=True)
+def create_flat_mask_process_batch(
+    tile_indices,
+    chunk_size,
+    tile_index_map,
+    tile_labels,
+    global_interior_high_edges,
+    global_interior_low_edges,
+    min_dist_high,
+    min_dist_low,
+    fdr_batch,
+    labels_list,
+):
+    batch_flat_masks = np.empty(
+        (len(tile_indices), chunk_size, chunk_size), dtype=np.int32
+    )
+    for i in prange(len(labels_list)):
+        labels = labels_list[i]
+        fdr = fdr_batch[i]
+        flat_mask = np.zeros_like(labels, dtype=np.int32)
+        tile_index = tile_indices[i]
+        tile_row, tile_col = tile_index_map[tile_index]
+        edge_labels = tile_labels[(tile_row, tile_col)]
+        interior_high_edges = global_interior_high_edges[tile_index]
+        exterior_edges, max_high_loop, loop_index_map = get_tile_exterior_edges(
+            min_dist_high, edge_labels
+        )
+        away_from_higher_tile(
+            interior_high_edges,
+            exterior_edges,
+            loop_index_map,
+            max_high_loop,
+            labels,
+            fdr,
+            flat_mask,
+        )
+        interior_low_edges = global_interior_low_edges[tile_index]
+        exterior_edges, max_low_loop, loop_index_map = get_tile_exterior_edges(
+            min_dist_low, edge_labels
+        )
+        towards_lower_tile(
+            interior_low_edges,
+            exterior_edges,
+            loop_index_map,
+            max_low_loop,
+            labels,
+            fdr,
+            flat_mask,
+        )
+        batch_flat_masks[i] = flat_mask
+    return batch_flat_masks
+
+
 def create_flat_mask(
     rows,
     cols,
@@ -755,68 +802,19 @@ def create_flat_mask(
     global_interior_low_edges,
     min_dist_high,
     min_dist_low,
+    batch_size=9,
 ):
-    # TODO: use multiprocessing to parallelize the processing of each tile
+    labels_dataset = open_dataset(os.path.join(working_dir, "labels.tif"))
+    labels_band = labels_dataset.GetRasterBand(1)
     tile_index = 0
-    for tile_row in range(rows):
-        for tile_col in range(cols):
-            fdr_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
-            fdr_tile.read(fdr_band)
-            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
-            fdr = fdr_tile.data
-            labels = read_tile(
-                os.path.join(working_dir, f"labels_{tile_row}_{tile_col}.tif")
-            )
-            flat_mask = np.zeros_like(labels, dtype=np.int32)
-            edge_labels = tile_labels[(tile_row, tile_col)]
-
-            interior_high_edges = global_interior_high_edges[tile_index]
-            exterior_edges, max_high_loop, loop_index_map = get_tile_exterior_edges(
-                min_dist_high, edge_labels
-            )
-            away_from_higher_tile(
-                interior_high_edges,
-                exterior_edges,
-                loop_index_map,
-                max_high_loop,
-                labels,
-                fdr,
-                flat_mask,
-            )
-
-            interior_low_edges = global_interior_low_edges[tile_index]
-            exterior_edges, max_low_loop, loop_index_map = get_tile_exterior_edges(
-                min_dist_low, edge_labels
-            )
-            towards_lower_tile(
-                interior_low_edges,
-                exterior_edges,
-                loop_index_map,
-                max_low_loop,
-                labels,
-                fdr,
-                flat_mask,
-            )
-
-            flat_mask_filepath = os.path.join(
-                working_dir, f"flat_mask_{tile_row}_{tile_col}.tif"
-            )
-            flat_mask_ds = create_dataset(
-                flat_mask_filepath, 0, gdal.GDT_Int32, chunk_size, chunk_size
-            )
-            flat_mask_band = flat_mask_ds.GetRasterBand(1)
-            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
-            flat_mask_tile.from_numpy(flat_mask)
-            flat_mask_tile.write(flat_mask_band)
-            tile_index += 1
-            flat_mask_band.FlushCache()
-            flat_mask_ds.FlushCache()
-            flat_mask_band = None
-            flat_mask_ds = None
-    mosaic_tiles(
-        os.path.join(working_dir, "flat_mask"),
-        math.ceil(dem_band.YSize / chunk_size),
-        math.ceil(dem_band.XSize / chunk_size),
+    tile_index_map = Dict.empty(key_type=int64, value_type=Tuple((int64, int64)))
+    labels_batch = []
+    fdr_batch = []
+    batch_tile_indices = []
+    num_tiles = math.ceil(fdr_band.YSize / chunk_size) * math.ceil(
+        fdr_band.XSize / chunk_size
+    )
+    flat_mask_dataset = create_dataset(
         os.path.join(working_dir, "flat_mask.tif"),
         0,
         gdal.GDT_Int32,
@@ -825,6 +823,47 @@ def create_flat_mask(
         dem_ds.GetGeoTransform(),
         dem_ds.GetProjection(),
     )
+    flat_mask_band = flat_mask_dataset.GetRasterBand(1)
+    for tile_row in range(rows):
+        for tile_col in range(cols):
+            fdr_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
+            fdr_tile.read(fdr_band)
+            flat_mask_tile = RasterChunk(0, 0, chunk_size, 0)
+            fdr_batch.append(fdr_tile.data)
+            labels_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
+            labels_tile.read(labels_band)
+            labels = labels_tile.data
+            batch_tile_indices.append(tile_index)
+            tile_index_map[tile_index] = (tile_row, tile_col)
+            tile_index += 1
+            labels_batch.append(labels)
+            if len(labels_batch) == batch_size or tile_index == num_tiles:
+                batch_flat_masks = create_flat_mask_process_batch(
+                    batch_tile_indices,
+                    chunk_size,
+                    tile_index_map,
+                    tile_labels,
+                    global_interior_high_edges,
+                    global_interior_low_edges,
+                    min_dist_high,
+                    min_dist_low,
+                    fdr_batch,
+                    labels_batch,
+                )
+                for flat_mask, result_index in zip(
+                    batch_flat_masks, batch_tile_indices
+                ):
+                    tile_row, tile_col = tile_index_map[result_index]
+                    flat_mask_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
+                    flat_mask_tile.from_numpy(flat_mask)
+                    flat_mask_tile.write(flat_mask_band)
+                labels_batch = []
+                batch_tile_indices = []
+
+    flat_mask_band.FlushCache()
+    flat_mask_dataset.FlushCache()
+    flat_mask_band = None
+    flat_mask_dataset = None
 
 
 def update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size):
