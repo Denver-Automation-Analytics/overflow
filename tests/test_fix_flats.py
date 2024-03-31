@@ -674,7 +674,7 @@ def test_fix_flats_tiled(
         "data/out/filled_dem.tif",
         "data/out/FDR_5070.tif",
         output_filepath,
-        chunk_size=4000,
+        chunk_size=200,
         working_dir=f"data/out/working",
     )
     ## output_filepath = f"/vsimem/fixed_fdr_{chunk_size}.tif"

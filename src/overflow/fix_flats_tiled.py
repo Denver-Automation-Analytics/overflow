@@ -316,15 +316,15 @@ def towards_lower_tile(
                 interior_low_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
+@njit(parallel=True)
 def compute_min_dist(labels_array, labels_edge_cells):
     perimeter = labels_edge_cells.perimeter
-    visited = np.zeros_like(labels_array, dtype=np.bool_)
-    min_dist = {}
-    for i, label in enumerate(perimeter):
+    min_dist = np.zeros((perimeter.size, perimeter.size), dtype=np.int32)
+    for i in prange(perimeter.size):
+        label = perimeter[i]
         if label == 0:
             continue
-        dists = np.full_like(perimeter, -1)
+        visited = set()
         dist = 0
         from_row, from_col = labels_edge_cells.get_row_col(i)
         marker = (-1, -1)
@@ -336,9 +336,9 @@ def compute_min_dist(labels_array, labels_edge_cells):
                 dist += 1
                 queue.push(marker)
                 continue
-            if visited[row, col]:
+            if (row, col) in visited:
                 continue
-            visited[row, col] = True
+            visited.add((row, col))
             if (
                 row == 0
                 or row == labels_array.shape[0] - 1
@@ -346,16 +346,14 @@ def compute_min_dist(labels_array, labels_edge_cells):
                 or col == labels_array.shape[1] - 1
             ):
                 j = labels_edge_cells.get_index(row, col)
-                if dists[j] > 0:
+                if min_dist[i][j] > 0:
                     continue
-                dists[j] = dist
+                min_dist[i][j] = dist
             for neighbor_row, neighbor_col in neighbor_generator(
                 row, col, labels_array.shape[0], labels_array.shape[1]
             ):
                 if labels_array[neighbor_row, neighbor_col] == label:
                     queue.push((neighbor_row, neighbor_col))
-        min_dist[i] = dists
-        visited[:, :] = False
 
     return min_dist
 
@@ -380,51 +378,51 @@ def construct_local_edge_graph(
     index_offset = labels.index_offset
 
     min_dists = compute_min_dist(labels_array, labels)
-    for i, dists in min_dists.items():
-        for j, dist in enumerate(dists):
-            if dist != -1:
-                graph[i].append((j + index_offset, dist))
-                graph[j].append((i + index_offset, dist))
+    # for i, dists in min_dists.items():
+    #     for j, dist in enumerate(dists):
+    #         if dist != -1:
+    #             graph[i].append((j + index_offset, dist))
+    #             graph[j].append((i + index_offset, dist))
 
-    ## for i, label in enumerate(labels.perimeter):
-    ##     if label == 0:
-    ##         # this cell is not part of a flat
-    ##         continue
-    ##     # walk around the perimeter and connect neighboring cells in the same group
-    ##     # a neighboring cell is defined as the next or previous cell with the same label
-    ##     # as seen by continuing clockwise around the perimeter, not necessarily the
-    ##     # cell directly adjacent in the grid
-    ##     for j in range(i + 1, labels.size() + 1):
-    ##         k = j % labels.size()
-    ##         if k != i and labels.perimeter[k] == label:
-    ##             dist = 1
-    ##             if j != i + 1:
-    ##                 dist = labels.distance(i, k, labels_array)
-    ##             graph[i].append((k + index_offset, dist))
-    ##             graph[k].append((i + index_offset, dist))
-    ##             break
-    ##     # connect non-neighboring cells to each other if they are part of the same group
-    ##     # we can skip any edges where there exist other paths that have the shortest
-    ##     # distances. For example, if the difference in the distances of vertex i to two
-    ##     # vertices (j and k) equals the distance of the
-    ##     # two end vertices to each other, only the closest vertex should be connected
-    ##     # since the path containing the vertices in between is among the shortest
-    ##     # paths between the two end vertices.
-    ##     # Theoretically, a fully connected graph would produce identical results.
-    ##     # However, this method is used to reduce the number of unnecessary edges in the graph.
-    ##     for j in range(i + 2, labels.size()):
-    ##         if labels.perimeter[j] != label:
-    ##             # this cell is not part of the same flat
-    ##             continue
-    ##         dist_ij = labels.distance(i, j, labels_array)
-    ##         for k in range(i + 1, j):
-    ##             dist_ik = labels.distance(i, k, labels_array)
-    ##             dist_kj = labels.distance(k, j, labels_array)
-    ##             if dist_ij == dist_ik + dist_kj:
-    ##                 break
-    ##         else:
-    ##             graph[i].append((j + index_offset, dist_ij))
-    ##             graph[j].append((i + index_offset, dist_ij))
+    for i, label in enumerate(labels.perimeter):
+        if label == 0:
+            # this cell is not part of a flat
+            continue
+        # walk around the perimeter and connect neighboring cells in the same group
+        # a neighboring cell is defined as the next or previous cell with the same label
+        # as seen by continuing clockwise around the perimeter, not necessarily the
+        # cell directly adjacent in the grid
+        for j in range(i + 1, labels.size() + 1):
+            k = j % labels.size()
+            if k != i and labels.perimeter[k] == label:
+                dist = min_dists[i][k]
+                graph[i].append((k + index_offset, dist))
+                graph[k].append((i + index_offset, dist))
+                break
+        # connect non-neighboring cells to each other if they are part of the same group
+        # we can skip any edges where there exist other paths that have the shortest
+        # distances. For example, if the difference in the distances of vertex i to two
+        # vertices (j and k) equals the distance of the
+        # two end vertices to each other, only the closest vertex should be connected
+        # since the path containing the vertices in between is among the shortest
+        # paths between the two end vertices.
+        # Theoretically, a fully connected graph would produce identical results.
+        # However, this method is used to reduce the number of unnecessary edges in the graph.
+        for j in range(i + 2, labels.size()):
+            if labels.perimeter[j] != label:
+                # this cell is not part of the same flat
+                continue
+            dist_ij = min_dists[i][j]
+            for k in range(i + 1, j):
+                if labels.perimeter[k] != label:
+                    continue
+                dist_ik = min_dists[i][k]
+                dist_kj = min_dists[k][j]
+                if dist_ij == dist_ik + dist_kj:
+                    break
+            else:
+                graph[i].append((j + index_offset, dist_ij))
+                graph[j].append((i + index_offset, dist_ij))
 
     # connect each cell to the high/low terrain node
     high_edges = List()
@@ -659,12 +657,11 @@ def setup_datasets(
     )
 
 
-@njit(parallel=True)
-def create_labels_and_graph_process_batch(
-    dem_list,
-    fdr_list,
-    tile_indices,
-    chunk_size,
+@njit
+def create_labels_and_graph_process_tile(
+    dem,
+    fdr,
+    tile_index,
     perimeter_cells_per_tile,
     tile_index_map,
     tile_labels,
@@ -674,38 +671,54 @@ def create_labels_and_graph_process_batch(
     global_interior_high_edges,
     global_interior_low_edges,
 ):
-    batch_labels = np.empty((len(dem_list), chunk_size, chunk_size), dtype=np.int32)
-    for i in prange(len(dem_list)):
-        dem = dem_list[i]
-        fdr = fdr_list[i]
-        tile_index = tile_indices[i]
-        # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
-        # creating the flat mask and labels
-        to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(
-            dem, fdr
-        )
-        edge_labels = TileEdgeCells(labels, tile_index)
-        graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
-            edge_labels,
-            TileEdgeCells(to_higher, tile_index),
-            TileEdgeCells(to_lower, tile_index),
-            labels,
-        )
-        tile_row, tile_col = tile_index_map[tile_index]
-        tile_labels[(tile_row, tile_col)] = edge_labels
-        for j, edge in enumerate(graph):
-            global_index = tile_index * perimeter_cells_per_tile + j
-            global_graph[global_index] = edge
-        for edge in perimeter_high_edges:
-            global_perimeter_high_edges.append(edge)
-        for edge in perimeter_low_edges:
-            global_perimeter_low_edges.append(edge)
-        if len(high_edges) > 0:
-            global_interior_high_edges[tile_index] = high_edges
-        if len(low_edges) > 0:
-            global_interior_low_edges[tile_index] = low_edges
-        batch_labels[i] = labels
-    return batch_labels
+    # resolve_flats_tile removes the buffer region from the dem and flow_dirs when
+    # creating the flat mask and labels
+    to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(dem, fdr)
+    edge_labels = TileEdgeCells(labels, tile_index)
+    tile_row, tile_col = tile_index_map[tile_index]
+    graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
+        edge_labels,
+        TileEdgeCells(to_higher, tile_index),
+        TileEdgeCells(to_lower, tile_index),
+        labels,
+    )
+    tile_labels[(tile_row, tile_col)] = edge_labels
+    for j, edge in enumerate(graph):
+        global_index = tile_index * perimeter_cells_per_tile + j
+        global_graph[global_index] = edge
+    for edge in perimeter_high_edges:
+        global_perimeter_high_edges.append(edge)
+    for edge in perimeter_low_edges:
+        global_perimeter_low_edges.append(edge)
+    if len(high_edges) > 0:
+        global_interior_high_edges[tile_index] = high_edges
+    if len(low_edges) > 0:
+        global_interior_low_edges[tile_index] = low_edges
+    return labels
+
+
+@njit
+def initalize_global_graph(num_tiles, perimeter_cells_per_tile):
+    global_graph = List()
+    empty_list_of_tuples = List()
+    empty_list_of_tuples.append((-1, -1))
+    empty_list_of_tuples.pop()
+    for _ in range(num_tiles * perimeter_cells_per_tile):
+        global_graph.append(empty_list_of_tuples)
+    global_perimeter_high_edges = empty_list_of_tuples
+    global_perimeter_low_edges = empty_list_of_tuples
+    global_interior_high_edges = List()
+    global_interior_low_edges = List()
+    for _ in range(num_tiles):
+        global_interior_high_edges.append(empty_list_of_tuples)
+        global_interior_low_edges.append(empty_list_of_tuples)
+    return (
+        global_graph,
+        global_perimeter_high_edges,
+        global_perimeter_low_edges,
+        global_interior_high_edges,
+        global_interior_low_edges,
+    )
 
 
 def create_labels_and_graph(
@@ -722,22 +735,17 @@ def create_labels_and_graph(
         fdr_band.XSize / chunk_size
     )
     perimeter_cells_per_tile = 4 * (chunk_size - 2) + 4
-    global_graph = List()
-    # TODO: initializing this list is slow
-    for _ in range(num_tiles * perimeter_cells_per_tile):
-        global_graph.append(List.empty_list(UniTuple(int64, 2)))
-    global_perimeter_high_edges = List.empty_list(UniTuple(int64, 2))
-    global_perimeter_low_edges = List.empty_list(UniTuple(int64, 2))
-    global_interior_high_edges = List()
-    global_interior_low_edges = List()
-    for _ in range(num_tiles):
-        global_interior_high_edges.append(List.empty_list(UniTuple(int64, 2)))
-        global_interior_low_edges.append(List.empty_list(UniTuple(int64, 2)))
+
+    (
+        global_graph,
+        global_perimeter_high_edges,
+        global_perimeter_low_edges,
+        global_interior_high_edges,
+        global_interior_low_edges,
+    ) = initalize_global_graph(num_tiles, perimeter_cells_per_tile)
+
     tile_index = 0
 
-    dem_batch = []
-    fdr_batch = []
-    batch_tile_indices = []
     num_tiles = math.ceil(fdr_band.YSize / chunk_size) * math.ceil(
         fdr_band.XSize / chunk_size
     )
@@ -767,34 +775,24 @@ def create_labels_and_graph(
         # perimeter DEM elevation values since we no don't need to identify them later
         fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
         fdr_tile.read(fdr_band)
-        dem_batch.append(dem_tile.data)
-        fdr_batch.append(fdr_tile.data)
-        batch_tile_indices.append(tile_index)
         tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
+        labels = create_labels_and_graph_process_tile(
+            dem_tile.data,
+            fdr_tile.data,
+            tile_index,
+            perimeter_cells_per_tile,
+            tile_index_map,
+            tile_labels,
+            global_graph,
+            global_perimeter_high_edges,
+            global_perimeter_low_edges,
+            global_interior_high_edges,
+            global_interior_low_edges,
+        )
+        labels_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 0)
+        labels_tile.from_numpy(labels)
+        labels_tile.write(labels_tile_band)
         tile_index += 1
-        if len(dem_batch) == batch_size or tile_index == num_tiles:
-            batch_labels = create_labels_and_graph_process_batch(
-                dem_batch,
-                fdr_batch,
-                batch_tile_indices,
-                chunk_size,
-                perimeter_cells_per_tile,
-                tile_index_map,
-                tile_labels,
-                global_graph,
-                global_perimeter_high_edges,
-                global_perimeter_low_edges,
-                global_interior_high_edges,
-                global_interior_low_edges,
-            )
-            for result_index, labels in zip(batch_tile_indices, batch_labels):
-                tile_row, tile_col = tile_index_map[result_index]
-                labels_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
-                labels_tile.from_numpy(labels)
-                labels_tile.write(labels_tile_band)
-            dem_batch = []
-            fdr_batch = []
-            batch_tile_indices = []
 
     labels_tile_band.FlushCache()
     labels_tile_ds.FlushCache()
@@ -810,6 +808,7 @@ def create_labels_and_graph(
     )
 
 
+@njit
 def complete_graph(tile_labels, rows, cols, global_graph):
     for i in range(rows - 1):
         for j in range(cols - 1):
