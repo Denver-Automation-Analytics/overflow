@@ -7,6 +7,7 @@ from tqdm import tqdm
 from numba import int64, float32, njit, int32
 from numba.experimental import jitclass
 from overflow.constants import NEIGHBOR_OFFSETS
+from overflow.util.numba_datastructures import Queue
 
 gdal.UseExceptions()
 
@@ -397,6 +398,7 @@ class TileEdgeCells:
         self,
         index: int,
         other_index: int,
+        labels_array: np.ndarray,
     ) -> int:
         """
         Returns the Chebyshev distance between two cells specified by their flattened indices.
@@ -405,7 +407,34 @@ class TileEdgeCells:
         """
         from_row, from_col = self.get_row_col(index)
         to_row, to_col = self.get_row_col(other_index)
-        return max(abs(from_row - to_row), abs(from_col - to_col))
+        chebyshev_distance = max(abs(from_row - to_row), abs(from_col - to_col))
+        if chebyshev_distance <= 1:
+            return chebyshev_distance
+        dist = 0
+        label = labels_array[from_row, from_col]
+        visited = np.zeros_like(labels_array, dtype=np.bool_)
+        visited[from_row, from_col] = True
+        marker = (-1, -1)
+        queue = Queue([(from_row, from_col)])
+        queue.push(marker)
+        while len(queue) > 1:
+            row, col = queue.pop()
+            if (row, col) == marker:
+                dist += 1
+                queue.push(marker)
+                continue
+            if (row, col) == (to_row, to_col):
+                return dist
+            for neighbor_row, neighbor_col in neighbor_generator(
+                row, col, self.rows, self.cols
+            ):
+                if (
+                    labels_array[neighbor_row, neighbor_col] == label
+                    and not visited[neighbor_row, neighbor_col]
+                ):
+                    visited[neighbor_row, neighbor_col] = True
+                    queue.push((neighbor_row, neighbor_col))
+        return dist
 
 
 @njit

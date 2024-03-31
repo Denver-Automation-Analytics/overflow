@@ -116,11 +116,7 @@ def label_flats(
 
 @njit
 def away_from_higher(
-    labels: np.ndarray,
-    flat_mask: np.ndarray,
-    fdr: np.ndarray,
-    high_edges: list,
-    flat_height: np.array,
+    dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, high_edges: list
 ) -> None:
     """Algorithm 5 AwayFromHigher: This procedure builds a gradient away from higher terrain,
     as described in §2.3 and Fig. 1.
@@ -158,12 +154,11 @@ def away_from_higher(
         if flat_mask[row, col] > 0:
             continue
         flat_mask[row, col] = loops
-        flat_height[labels[row, col] - 1] = loops
         for neighbor_row, neighbor_col in neighbor_generator(
             row, col, fdr.shape[0], fdr.shape[1]
         ):
             if (
-                labels[neighbor_row, neighbor_col] == labels[row, col]
+                dem[neighbor_row, neighbor_col] == dem[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
                 high_edges.push((neighbor_row, neighbor_col))
@@ -171,11 +166,7 @@ def away_from_higher(
 
 @njit
 def towards_lower(
-    labels: np.ndarray,
-    flat_mask: np.ndarray,
-    fdr: np.ndarray,
-    low_edges: list,
-    flat_height: np.array,
+    dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, low_edges: list
 ) -> None:
     """Algorithm 6 TowardsLower:  This procedure builds a gradient towards lower terrain and
     combines it with the gradient away from higher terrain, as described in §2.4 and Fig. 2.
@@ -208,6 +199,7 @@ def towards_lower(
     marker = (-1, -1)
     low_edges = Queue(low_edges)
     low_edges.push(marker)
+    max_flat_height = (2**31 - 1) // 2
     while len(low_edges) > 1:
         row, col = low_edges.pop()
         if row == marker[0] and col == marker[1]:
@@ -217,23 +209,21 @@ def towards_lower(
         if flat_mask[row, col] > 0:
             continue
         if flat_mask[row, col] < 0:
-            flat_mask[row, col] += flat_height[labels[row, col] - 1] + 2 * loops
+            flat_mask[row, col] += max_flat_height + 2 * loops
         else:
             flat_mask[row, col] = 2 * loops
         for neighbor_row, neighbor_col in neighbor_generator(
             row, col, fdr.shape[0], fdr.shape[1]
         ):
             if (
-                labels[neighbor_row, neighbor_col] == labels[row, col]
+                dem[neighbor_row, neighbor_col] == dem[row, col]
                 and fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_UNDEFINED
             ):
                 low_edges.push((neighbor_row, neighbor_col))
 
 
 @njit
-def resolve_flats(
-    dem: np.ndarray, flow_dirs: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
     """Algorithm 1 ResolveFlats: The main body of the algorithm, as described in §2.1.
     Upon entry:
     (1) DEM contains the elevations of every cell or a value NoData for cells not part of the DEM.
@@ -256,49 +246,21 @@ def resolve_flats(
     """
     # Initialize FlatMask and Labels arrays
     flat_mask = np.zeros_like(dem, dtype=np.int32)
-    labels = np.zeros_like(dem, dtype=np.int32)
 
     # Find flat edges
     high_edges, low_edges = flat_edges(dem, flow_dirs)
 
-    # Check if there are undrainable flats
-    if len(low_edges) == 0:
-        if len(high_edges) != 0:
-            print("There were undrainable flats")
-        else:
-            print("There were no flats")
-        return flat_mask, labels
-
-    label = 1
-    # Label flats from low edges
-    for row, col in low_edges:
-        if labels[row, col] == 0:
-            label_flats(dem, labels, label, row, col)
-            label += 1
-
-    # Remove unlabeled cells from high edges
-    high_edge_count = len(high_edges)
-    high_edges = [(row, col) for row, col in high_edges if labels[row, col] != 0]
-    if high_edge_count != len(high_edges):
-        print("Not all flats have outlets")
-        return flat_mask, labels
-
-    # Initialize FlatHeight array
-    flat_height = np.zeros(label, dtype=np.int32)
-
     # Compute gradient away from higher terrain
-    away_from_higher(labels, flat_mask, flow_dirs, high_edges, flat_height)
+    away_from_higher(dem, flat_mask, flow_dirs, high_edges)
 
     # Compute gradient towards lower terrain
-    towards_lower(labels, flat_mask, flow_dirs, low_edges, flat_height)
+    towards_lower(dem, flat_mask, flow_dirs, low_edges)
 
-    return flat_mask, labels
+    return flat_mask
 
 
 @njit(parallel=True)
-def d8_masked_flow_dirs(
-    flat_mask: np.ndarray, fdr: np.ndarray, labels: np.ndarray
-) -> None:
+def d8_masked_flow_dirs(dem, flat_mask: np.ndarray, fdr: np.ndarray) -> None:
     """
     Determine flow directions across flats using the provided flat_mask and labels arrays.
     This is algorithm 7 from the paper https://rbarnes.org/sci/2014_flats.pdf.
@@ -324,8 +286,6 @@ def d8_masked_flow_dirs(
     # pylint: disable=not-an-iterable
     for row in prange(fdr.shape[0]):
         for col in range(fdr.shape[1]):
-            if fdr[row, col] == FLOW_DIRECTION_NODATA:
-                continue
             if fdr[row, col] != FLOW_DIRECTION_UNDEFINED:
                 continue
             nmin = FLOW_DIRECTION_UNDEFINED
@@ -340,7 +300,8 @@ def d8_masked_flow_dirs(
                     or neighbor_col >= fdr.shape[1]
                 ):
                     continue
-                if labels[neighbor_row, neighbor_col] != labels[row, col]:
+                # if the fdr is not part of the same flat, skip
+                if dem[neighbor_row, neighbor_col] != dem[row, col]:
                     continue
                 # calculate slope
                 dz = float(flat_mask[neighbor_row, neighbor_col]) - flat_mask[row, col]

@@ -104,6 +104,42 @@ def filter_edges(edges, dem_shape):
 
 
 @njit
+def flat_edges_tile(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
+    """TODO"""
+    # FIFO queues for the high and low edge cells
+    high_edges = List()
+    low_edges = List()
+
+    for row in range(1, dem.shape[0] - 1):
+        for col in range(1, dem.shape[1] - 1):
+            for neighbor_row, neighbor_col in neighbor_generator(
+                row, col, fdr.shape[0], fdr.shape[1]
+            ):
+                # continue if the neighbor is nodata
+                fdr_neighbor = fdr[neighbor_row, neighbor_col]
+                if fdr_neighbor == FLOW_DIRECTION_NODATA:
+                    continue
+                fdr_current = fdr[row, col]
+                if (
+                    fdr_current != FLOW_DIRECTION_UNDEFINED
+                    and fdr_neighbor == FLOW_DIRECTION_UNDEFINED
+                    and dem[row, col] == dem[neighbor_row, neighbor_col]
+                ):
+                    # cell is a low edge cell since it has a defined flow direction and a neighbor does not
+                    # because the neighbor is a flat cell
+                    low_edges.append((row - 1, col - 1))
+                    break
+                if (
+                    fdr_current == FLOW_DIRECTION_UNDEFINED
+                    and dem[row, col] < dem[neighbor_row, neighbor_col]
+                ):
+                    # cell is a high edge cell since it has no defined flow direction and a neighbor is higher
+                    high_edges.append((row - 1, col - 1))
+                    break
+    return high_edges, low_edges
+
+
+@njit
 def resolve_flats_tile(
     dem: np.ndarray, flow_dirs: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:
@@ -132,14 +168,11 @@ def resolve_flats_tile(
 
     # Find flat edges, this will not result in any uncertain edges
     # because we are processing with a 1 cell buffer
-    high_edges, low_edges = flat_edges(dem, flow_dirs)
+    high_edges, low_edges = flat_edges_tile(dem, flow_dirs)
 
     # remove buffer from dem and flow_dirs since we now have the edges
     dem = dem[1:-1, 1:-1]
     flow_dirs = flow_dirs[1:-1, 1:-1]
-    # remove high and low edges from outside the tile
-    high_edges = filter_edges(high_edges, dem.shape)
-    low_edges = filter_edges(low_edges, dem.shape)
 
     # if the tile is entirely flat, set labels to 1 and return zero gradients
     if (
@@ -284,10 +317,55 @@ def towards_lower_tile(
 
 
 @njit
+def compute_min_dist(labels_array, labels_edge_cells):
+    perimeter = labels_edge_cells.perimeter
+    visited = np.zeros_like(labels_array, dtype=np.bool_)
+    min_dist = {}
+    for i, label in enumerate(perimeter):
+        if label == 0:
+            continue
+        dists = np.full_like(perimeter, -1)
+        dist = 0
+        from_row, from_col = labels_edge_cells.get_row_col(i)
+        marker = (-1, -1)
+        queue = Queue([(from_row, from_col)])
+        queue.push(marker)
+        while len(queue) > 1:
+            row, col = queue.pop()
+            if (row, col) == marker:
+                dist += 1
+                queue.push(marker)
+                continue
+            if visited[row, col]:
+                continue
+            visited[row, col] = True
+            if (
+                row == 0
+                or row == labels_array.shape[0] - 1
+                or col == 0
+                or col == labels_array.shape[1] - 1
+            ):
+                j = labels_edge_cells.get_index(row, col)
+                if dists[j] > 0:
+                    continue
+                dists[j] = dist
+            for neighbor_row, neighbor_col in neighbor_generator(
+                row, col, labels_array.shape[0], labels_array.shape[1]
+            ):
+                if labels_array[neighbor_row, neighbor_col] == label:
+                    queue.push((neighbor_row, neighbor_col))
+        min_dist[i] = dists
+        visited[:, :] = False
+
+    return min_dist
+
+
+@njit
 def construct_local_edge_graph(
     labels: TileEdgeCells,
     to_higher: TileEdgeCells,
     to_lower: TileEdgeCells,
+    labels_array: np.ndarray,
 ) -> tuple[list, list, list]:
     # create a list of lists to represent the graph
     # there are at most labels.size() vertices in the graph
@@ -300,43 +378,53 @@ def construct_local_edge_graph(
         new_list.pop()
         graph.append(new_list)
     index_offset = labels.index_offset
-    for i, label in enumerate(labels.perimeter):
-        if label == 0:
-            # this cell is not part of a flat
-            continue
-        # walk around the perimeter and connect neighboring cells in the same group
-        # a neighboring cell is defined as the next or previous cell with the same label
-        # as seen by continuing clockwise around the perimeter, not necessarily the
-        # cell directly adjacent in the grid
-        for j in range(i + 1, labels.size() + 1):
-            k = j % labels.size()
-            if k != i and labels.perimeter[k] == label:
-                dist = labels.distance(i, k)
-                graph[i].append((k + index_offset, dist))
-                graph[k].append((i + index_offset, dist))
-                break
-        # connect non-neighboring cells to each other if they are part of the same group
-        # we can skip any edges where there exist other paths that have the shortest
-        # distances. For example, if the difference in the distances of vertex i to two
-        # vertices (j and k) equals the distance of the
-        # two end vertices to each other, only the closest vertex should be connected
-        # since the path containing the vertices in between is among the shortest
-        # paths between the two end vertices.
-        # Theoretically, a fully connected graph would produce identical results.
-        # However, this method is used to reduce the number of unnecessary edges in the graph.
-        for j in range(i + 2, labels.size()):
-            dist_ij = labels.distance(i, j)
-            if labels.perimeter[j] != label:
-                # this cell is not part of the same flat
-                continue
-            for k in range(i + 1, j):
-                dist_ik = labels.distance(i, k)
-                dist_kj = labels.distance(k, j)
-                if dist_ij == dist_ik + dist_kj:
-                    break
-            else:
-                graph[i].append((j + index_offset, dist_ij))
-                graph[j].append((i + index_offset, dist_ij))
+
+    min_dists = compute_min_dist(labels_array, labels)
+    for i, dists in min_dists.items():
+        for j, dist in enumerate(dists):
+            if dist != -1:
+                graph[i].append((j + index_offset, dist))
+                graph[j].append((i + index_offset, dist))
+
+    ## for i, label in enumerate(labels.perimeter):
+    ##     if label == 0:
+    ##         # this cell is not part of a flat
+    ##         continue
+    ##     # walk around the perimeter and connect neighboring cells in the same group
+    ##     # a neighboring cell is defined as the next or previous cell with the same label
+    ##     # as seen by continuing clockwise around the perimeter, not necessarily the
+    ##     # cell directly adjacent in the grid
+    ##     for j in range(i + 1, labels.size() + 1):
+    ##         k = j % labels.size()
+    ##         if k != i and labels.perimeter[k] == label:
+    ##             dist = 1
+    ##             if j != i + 1:
+    ##                 dist = labels.distance(i, k, labels_array)
+    ##             graph[i].append((k + index_offset, dist))
+    ##             graph[k].append((i + index_offset, dist))
+    ##             break
+    ##     # connect non-neighboring cells to each other if they are part of the same group
+    ##     # we can skip any edges where there exist other paths that have the shortest
+    ##     # distances. For example, if the difference in the distances of vertex i to two
+    ##     # vertices (j and k) equals the distance of the
+    ##     # two end vertices to each other, only the closest vertex should be connected
+    ##     # since the path containing the vertices in between is among the shortest
+    ##     # paths between the two end vertices.
+    ##     # Theoretically, a fully connected graph would produce identical results.
+    ##     # However, this method is used to reduce the number of unnecessary edges in the graph.
+    ##     for j in range(i + 2, labels.size()):
+    ##         if labels.perimeter[j] != label:
+    ##             # this cell is not part of the same flat
+    ##             continue
+    ##         dist_ij = labels.distance(i, j, labels_array)
+    ##         for k in range(i + 1, j):
+    ##             dist_ik = labels.distance(i, k, labels_array)
+    ##             dist_kj = labels.distance(k, j, labels_array)
+    ##             if dist_ij == dist_ik + dist_kj:
+    ##                 break
+    ##         else:
+    ##             graph[i].append((j + index_offset, dist_ij))
+    ##             graph[j].append((i + index_offset, dist_ij))
 
     # connect each cell to the high/low terrain node
     high_edges = List()
@@ -601,6 +689,7 @@ def create_labels_and_graph_process_batch(
             edge_labels,
             TileEdgeCells(to_higher, tile_index),
             TileEdgeCells(to_lower, tile_index),
+            labels,
         )
         tile_row, tile_col = tile_index_map[tile_index]
         tile_labels[(tile_row, tile_col)] = edge_labels
@@ -634,6 +723,7 @@ def create_labels_and_graph(
     )
     perimeter_cells_per_tile = 4 * (chunk_size - 2) + 4
     global_graph = List()
+    # TODO: initializing this list is slow
     for _ in range(num_tiles * perimeter_cells_per_tile):
         global_graph.append(List.empty_list(UniTuple(int64, 2)))
     global_perimeter_high_edges = List.empty_list(UniTuple(int64, 2))
@@ -859,6 +949,7 @@ def create_flat_mask(
                     flat_mask_tile.write(flat_mask_band)
                 labels_batch = []
                 batch_tile_indices = []
+                fdr_batch = []
 
     flat_mask_band.FlushCache()
     flat_mask_dataset.FlushCache()
@@ -866,18 +957,16 @@ def create_flat_mask(
     flat_mask_dataset = None
 
 
-def update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size):
-    labels_ds = open_dataset(os.path.join(working_dir, "labels.tif"))
-    labels_band = labels_ds.GetRasterBand(1)
+def update_fdr(dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size):
     flat_mask_ds = open_dataset(os.path.join(working_dir, "flat_mask.tif"))
     flat_mask_band = flat_mask_ds.GetRasterBand(1)
     # update fdr using d8_masked_flow_dirs
     for fdr_tile in raster_chunker(fdr_band, chunk_size, 1):
-        labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
-        labels_tile.read(labels_band)
+        dem_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
+        dem_tile.read(dem_band)
         flat_mask_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 1)
         flat_mask_tile.read(flat_mask_band)
-        d8_masked_flow_dirs(flat_mask_tile.data, fdr_tile.data, labels_tile.data)
+        d8_masked_flow_dirs(dem_tile.data, flat_mask_tile.data, fdr_tile.data)
         fdr_tile.write(fixed_fdr_band)
     fixed_fdr_band.FlushCache()
 
@@ -955,7 +1044,7 @@ def fix_flats(
     )
 
     # update the flow direction raster
-    update_fdr(fdr_band, fixed_fdr_band, working_dir, chunk_size)
+    update_fdr(dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size)
 
     if cleanup_working_dir:
         shutil.rmtree(working_dir)
