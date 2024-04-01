@@ -230,7 +230,9 @@ def get_tile_exterior_edges(min_dist, edge_labels):
             max_loop = max(max_loop, dist)
             loop_index_map[dist] = index
             index += 1
-            exterior_edges.append([(row, col)])
+            new_edge = List()
+            new_edge.append((row, col))
+            exterior_edges.append(new_edge)
         else:
             exterior_edges[loop_index_map[dist]].append((row, col))
     return exterior_edges, max_loop, loop_index_map
@@ -257,7 +259,8 @@ def away_from_higher_tile(
             if loops in loop_index_map:
                 for row, col in exterior_high_edges[loop_index_map[loops]]:
                     interior_high_edges.push((row, col))
-            interior_high_edges.push(marker)
+            if len(interior_high_edges) > 1:
+                interior_high_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -298,7 +301,8 @@ def towards_lower_tile(
             if loops in loop_index_map:
                 for row, col in exterior_low_edges[loop_index_map[loops]]:
                     interior_low_edges.push((row, col))
-            interior_low_edges.push(marker)
+            if len(interior_low_edges) > 1:
+                interior_low_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -705,8 +709,8 @@ def initalize_global_graph(num_tiles, perimeter_cells_per_tile):
     empty_list_of_tuples.pop()
     for _ in range(num_tiles * perimeter_cells_per_tile):
         global_graph.append(empty_list_of_tuples)
-    global_perimeter_high_edges = empty_list_of_tuples
-    global_perimeter_low_edges = empty_list_of_tuples
+    global_perimeter_high_edges = empty_list_of_tuples.copy()
+    global_perimeter_low_edges = empty_list_of_tuples.copy()
     global_interior_high_edges = List()
     global_interior_low_edges = List()
     for _ in range(num_tiles):
