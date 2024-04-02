@@ -259,8 +259,7 @@ def away_from_higher_tile(
             if loops in loop_index_map:
                 for row, col in exterior_high_edges[loop_index_map[loops]]:
                     interior_high_edges.push((row, col))
-            if len(interior_high_edges) > 1:
-                interior_high_edges.push(marker)
+            interior_high_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -275,7 +274,7 @@ def away_from_higher_tile(
                 interior_high_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
+# @njit
 def towards_lower_tile(
     interior_low_edges,
     exterior_low_edges,
@@ -301,8 +300,7 @@ def towards_lower_tile(
             if loops in loop_index_map:
                 for row, col in exterior_low_edges[loop_index_map[loops]]:
                     interior_low_edges.push((row, col))
-            if len(interior_low_edges) > 1:
-                interior_low_edges.push(marker)
+            interior_low_edges.push(marker)
             continue
         if flat_mask[row, col] > 0:
             continue
@@ -829,7 +827,7 @@ def complete_graph(tile_labels, rows, cols, global_graph):
             )
 
 
-@njit(parallel=True)
+# @njit(parallel=True)
 def create_flat_mask_process_batch(
     tile_indices,
     chunk_size,
@@ -852,7 +850,7 @@ def create_flat_mask_process_batch(
         tile_index = tile_indices[i]
         tile_row, tile_col = tile_index_map[tile_index]
         edge_labels = tile_labels[(tile_row, tile_col)]
-        interior_high_edges = global_interior_high_edges[tile_index]
+        interior_high_edges = global_interior_high_edges[tile_index].copy()
         exterior_edges, max_high_loop, loop_index_map = get_tile_exterior_edges(
             min_dist_high, edge_labels
         )
@@ -865,7 +863,7 @@ def create_flat_mask_process_batch(
             fdr,
             flat_mask,
         )
-        interior_low_edges = global_interior_low_edges[tile_index]
+        interior_low_edges = global_interior_low_edges[tile_index].copy()
         exterior_edges, max_low_loop, loop_index_map = get_tile_exterior_edges(
             min_dist_low, edge_labels
         )
