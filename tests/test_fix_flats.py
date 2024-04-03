@@ -655,12 +655,12 @@ def test_fix_flats():
     flat_mask_dataset = None
 
 
-# @pytest.mark.parametrize("chunk_size", [2, 4, 8, 12])
+@pytest.mark.parametrize("chunk_size", [2, 4, 8, 12])
 def test_fix_flats_tiled(
     dem_zhou_2022_filepath,
     fdr_zhou_2022_filepath,
     expected_fixed_fdr_zhou_2022,
-    # chunk_size,
+    chunk_size,
 ):
     """
     Test the fix_flats function with different chunk sizes.
@@ -669,22 +669,22 @@ def test_fix_flats_tiled(
      - Chunk size 8 will test a single tile the size of the entire DEM
      - Chunk size 12 will test a chunk size larger than the DEM
     """
-    output_filepath = f"data/test/fixed_fdr_tiled.tif"
-    fix_flats(
-        "data/test/dem.tif",
-        "data/test/fdr.tif",
-        output_filepath,
-        chunk_size=500,
-        working_dir=f"data/test/working_tiled",
-    )
-    ## output_filepath = f"/vsimem/fixed_fdr_{chunk_size}.tif"
+    ## output_filepath = f"data/out/fixed_fdr_tiled.tif"
     ## fix_flats(
-    ##     dem_zhou_2022_filepath,
-    ##     fdr_zhou_2022_filepath,
+    ##     "data/out/filled_dem.tif",
+    ##     "data/out/FDR_5070.tif",
     ##     output_filepath,
-    ##     chunk_size=chunk_size,
-    ##     working_dir=f"/vsimem/{chunk_size}/",
+    ##     chunk_size=500,
+    ##     working_dir=f"data/out/working",
     ## )
-    ## fixed_fdr_dataset = gdal.Open(output_filepath)
-    ## fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
-    ## assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)
+    output_filepath = f"/vsimem/fixed_fdr_{chunk_size}.tif"
+    fix_flats(
+        dem_zhou_2022_filepath,
+        fdr_zhou_2022_filepath,
+        output_filepath,
+        chunk_size=chunk_size,
+        working_dir=f"/vsimem/{chunk_size}/",
+    )
+    fixed_fdr_dataset = gdal.Open(output_filepath)
+    fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
+    assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)

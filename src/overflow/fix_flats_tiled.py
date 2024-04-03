@@ -4,7 +4,8 @@ import math
 import heapq
 import tempfile
 import numpy as np
-from numba import njit, int64, prange, int32
+from numba import njit, int64, prange, int32, float32
+from numba.experimental import jitclass
 from osgeo import gdal
 import concurrent.futures
 from numba.typed import List, Dict
@@ -20,6 +21,7 @@ from .util.raster import (
     create_dataset,
     read_tile,
     mosaic_tiles,
+    get_tile_perimeter,
 )
 from .fix_flats import flat_edges, label_flats, d8_masked_flow_dirs
 from .constants import (
@@ -440,9 +442,37 @@ def join_neighbor(
 
 
 @njit
+def get_perimeter_side(perimeter: np.ndarray, rows: int, cols: int, side: Side):
+    """
+    Returns the cells on the specified side of the perimeter.
+    """
+    if side == Side.TOP:
+        # The enitire top edge (from left to right) includes the corners
+        return perimeter[:cols]
+    elif side == Side.RIGHT:
+        # The enitire right edge (from top to bottom) includes the corners
+        return perimeter[cols - 1 : cols + rows - 1]
+    elif side == Side.BOTTOM:
+        # The enitire bottom edge (from left to right) includes the corners
+        return perimeter[cols + rows - 2 : 2 * cols + rows - 2][
+            ::-1
+        ]  # reversed from internal representation
+    elif side == Side.LEFT:
+        # The entire left edge (from bottom to top) includes the corners
+        indices = np.empty(rows, dtype=np.int32)
+        indices[0] = 0
+        indices[1:] = np.arange(perimeter.size - 1, perimeter.size - rows, -1)
+        return perimeter[indices]
+    else:
+        raise ValueError("Invalid side")
+
+
+@njit
 def handle_edge(
     labels_a: TileEdgeCells,
     labels_b: TileEdgeCells,
+    elevations_a: np.ndarray,
+    elevations_b: np.ndarray,
     side_a: Side,
     side_b: Side,
     global_graph: list,
@@ -452,23 +482,32 @@ def handle_edge(
     # neighboring cells are (-1, 0, 1) away
     labels_a_side = labels_a.get_side(side_a)
     labels_b_side = labels_b.get_side(side_b)
+    rows = labels_a.rows
+    cols = labels_a.cols
+    elevations_a_side = get_perimeter_side(elevations_a, rows, cols, side_a)
+    elevations_b_side = get_perimeter_side(elevations_b, rows, cols, side_b)
     for i, label_i in enumerate(labels_a_side):
         # if the cell is not part of a flat, skip it
         if label_i == 0:
             continue
+        elev_i = elevations_a_side[i]
         label_j = labels_b_side[i]
         global_index_a = labels_a.get_index_side(side_a, i) + labels_a.index_offset
-        # if the neighboring cell directly adjacent is part of a flat, connect this cell to it
-        if label_j != 0:
+        # if the neighboring cell directly adjacent is part of the same flat, connect this cell to it
+        if label_j != 0 and elev_i == elevations_b_side[i]:
             global_index_b = labels_b.get_index_side(side_b, i) + labels_b.index_offset
             join_neighbor(global_index_a, global_index_b, global_graph)
-        # if the neighboring cell diagonally is part of a flat, connect this cell to it
-        if i != 0 and labels_b_side[i - 1] != 0:
+        # if the neighboring cell diagonally is part of the same flat, connect this cell to it
+        if i != 0 and labels_b_side[i - 1] != 0 and elev_i == elevations_b_side[i - 1]:
             global_index_b = (
                 labels_b.get_index_side(side_b, i - 1) + labels_b.index_offset
             )
             join_neighbor(global_index_a, global_index_b, global_graph)
-        if i != labels_a_side.size - 1 and labels_b_side[i + 1] != 0:
+        if (
+            i != labels_a_side.size - 1
+            and labels_b_side[i + 1] != 0
+            and elev_i == elevations_b_side[i + 1]
+        ):
             global_index_b = (
                 labels_b.get_index_side(side_b, i + 1) + labels_b.index_offset
             )
@@ -479,13 +518,19 @@ def handle_edge(
 def handle_corner(
     labels_a: TileEdgeCells,
     labels_b: TileEdgeCells,
+    elevations_a: np.ndarray,
+    elevations_b: np.ndarray,
     corner_a: Corner,
     corner_b: Corner,
     global_graph: list,
 ):
     label_a = labels_a.get_corner(corner_a)
     label_b = labels_b.get_corner(corner_b)
-    if label_a != 0 and label_b != 0:
+    corner_a_index = labels_a.get_index_corner(corner_a)
+    corner_b_index = labels_b.get_index_corner(corner_b)
+    elev_a = elevations_a[corner_a_index]
+    elev_b = elevations_b[corner_b_index]
+    if label_a != 0 and label_b != 0 and elev_a == elev_b:
         global_index_a = labels_a.get_index_corner(corner_a) + labels_a.index_offset
         global_index_b = labels_b.get_index_corner(corner_b) + labels_b.index_offset
         join_neighbor(global_index_a, global_index_b, global_graph)
@@ -497,6 +542,10 @@ def join_adjacent_tiles(
     labels_b: TileEdgeCells,
     labels_c: TileEdgeCells,
     labels_d: TileEdgeCells,
+    elevations_a: np.ndarray,
+    elevations_b: np.ndarray,
+    elevations_c: np.ndarray,
+    elevations_d: np.ndarray,
     global_graph: list,
 ):
     # + - - + - - +
@@ -508,6 +557,8 @@ def join_adjacent_tiles(
     handle_edge(
         labels_a,
         labels_b,
+        elevations_a,
+        elevations_b,
         Side.RIGHT,
         Side.LEFT,
         global_graph,
@@ -516,6 +567,8 @@ def join_adjacent_tiles(
     handle_edge(
         labels_b,
         labels_d,
+        elevations_b,
+        elevations_d,
         Side.BOTTOM,
         Side.TOP,
         global_graph,
@@ -524,6 +577,8 @@ def join_adjacent_tiles(
     handle_edge(
         labels_d,
         labels_c,
+        elevations_d,
+        elevations_c,
         Side.LEFT,
         Side.RIGHT,
         global_graph,
@@ -532,6 +587,8 @@ def join_adjacent_tiles(
     handle_edge(
         labels_c,
         labels_a,
+        elevations_c,
+        elevations_a,
         Side.TOP,
         Side.BOTTOM,
         global_graph,
@@ -540,6 +597,8 @@ def join_adjacent_tiles(
     handle_corner(
         labels_a,
         labels_d,
+        elevations_a,
+        elevations_d,
         Corner.BOTTOM_RIGHT,
         Corner.TOP_LEFT,
         global_graph,
@@ -548,6 +607,8 @@ def join_adjacent_tiles(
     handle_corner(
         labels_b,
         labels_c,
+        elevations_b,
+        elevations_c,
         Corner.BOTTOM_LEFT,
         Corner.TOP_RIGHT,
         global_graph,
@@ -652,6 +713,7 @@ def create_labels_and_graph_process_tile(
     perimeter_cells_per_tile,
     tile_index_map,
     tile_labels,
+    tile_elevations,
     global_graph,
     global_perimeter_high_edges,
     global_perimeter_low_edges,
@@ -670,6 +732,9 @@ def create_labels_and_graph_process_tile(
         labels,
     )
     tile_labels[(tile_row, tile_col)] = edge_labels
+    dem = dem[1:-1, 1:-1]
+    edge_elevations = get_tile_perimeter(dem)
+    tile_elevations[(tile_row, tile_col)] = edge_elevations
     for j, edge in enumerate(graph):
         global_index = tile_index * perimeter_cells_per_tile + j
         global_graph[global_index] = edge
@@ -708,6 +773,29 @@ def initalize_global_graph(num_tiles, perimeter_cells_per_tile):
     )
 
 
+# @jitclass
+class TiledFixFlatsGlobalData:
+    def __init__(self, raster_shape: tuple[int, int], chunk_size: tuple[int, int]):
+        self.tile_count = math.ceil(raster_shape[0] / chunk_size[0]) * math.ceil(
+            raster_shape[1] / chunk_size[1]
+        )
+        self.perimeter_cells_per_tile = 2 * chunk_size[0] + 2 * chunk_size[1] - 4
+        self.global_graph = List()
+        for _ in range(self.tile_count * self.perimeter_cells_per_tile):
+            self.global_graph.append(List.empty_list(Tuple((int64, int64))))
+        self.global_perimeter_high_edges = List.empty_list(Tuple((int64, int64)))
+        self.global_perimeter_low_edges = List.empty_list(Tuple((int64, int64)))
+        self.global_interior_high_edges = List()
+        self.global_interior_low_edges = List()
+        for _ in range(self.tile_count):
+            self.global_interior_high_edges.append(
+                List.empty_list(Tuple((int64, int64)))
+            )
+            self.global_interior_low_edges.append(
+                List.empty_list(Tuple((int64, int64)))
+            )
+
+
 def create_labels_and_graph(
     dem_band,
     fdr_band,
@@ -742,6 +830,9 @@ def create_labels_and_graph(
     tile_labels = Dict()
     tile_labels[(0, 0)] = dummy_tile_edge_cells
     del tile_labels[(0, 0)]
+    tile_elevations = Dict.empty(
+        key_type=Tuple((int64, int64)), value_type=Array(float32, 1, "C")
+    )
 
     labels_tile_filepath = os.path.join(working_directory, "labels.tif")
     labels_tile_ds = create_dataset(
@@ -770,6 +861,7 @@ def create_labels_and_graph(
             perimeter_cells_per_tile,
             tile_index_map,
             tile_labels,
+            tile_elevations,
             global_graph,
             global_perimeter_high_edges,
             global_perimeter_low_edges,
@@ -787,6 +879,7 @@ def create_labels_and_graph(
     labels_tile_band = None
     return (
         tile_labels,
+        tile_elevations,
         global_graph,
         global_perimeter_high_edges,
         global_perimeter_low_edges,
@@ -796,18 +889,26 @@ def create_labels_and_graph(
 
 
 @njit
-def complete_graph(tile_labels, rows, cols, global_graph):
+def complete_graph(tile_labels, tile_elevations, rows, cols, global_graph):
     for i in range(rows - 1):
         for j in range(cols - 1):
             labels_a = tile_labels[(i, j)]
             labels_b = tile_labels[(i, j + 1)]
             labels_c = tile_labels[(i + 1, j)]
             labels_d = tile_labels[(i + 1, j + 1)]
+            elevations_a = tile_elevations[(i, j)]
+            elevations_b = tile_elevations[(i, j + 1)]
+            elevations_c = tile_elevations[(i + 1, j)]
+            elevations_d = tile_elevations[(i + 1, j + 1)]
             join_adjacent_tiles(
                 labels_a,
                 labels_b,
                 labels_c,
                 labels_d,
+                elevations_a,
+                elevations_b,
+                elevations_c,
+                elevations_d,
                 global_graph,
             )
 
@@ -990,6 +1091,7 @@ def fix_flats(
     # create labels and graph for each tile
     (
         tile_labels,
+        tile_elevations,
         global_graph,
         global_perimeter_high_edges,
         global_perimeter_low_edges,
@@ -1005,7 +1107,9 @@ def fix_flats(
     )
 
     # complete the graph by connecting the neighboring tiles
-    complete_graph(tile_labels, num_tile_rows, num_tile_cols, global_graph)
+    complete_graph(
+        tile_labels, tile_elevations, num_tile_rows, num_tile_cols, global_graph
+    )
 
     # solve the graph for the low and high terrain nodes
     min_dist_low = solve_low_graph(global_graph, global_perimeter_low_edges)

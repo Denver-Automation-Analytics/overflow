@@ -262,6 +262,19 @@ class Corner(Enum):
     BOTTOM_LEFT = 4
 
 
+@njit
+def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
+    rows = len(array)
+    cols = len(array[0])
+    perimeter = np.empty(2 * (rows + cols) - 4, dtype=array.dtype)
+    # Fill the perimeter array
+    perimeter[:cols] = array[0]  # top
+    perimeter[cols : cols + rows - 2] = array[1:-1, -1]  # right
+    perimeter[cols + rows - 2 : 2 * cols + rows - 2] = array[-1, ::-1]  # bottom
+    perimeter[2 * cols + rows - 2 :] = array[-2:0:-1, 0]  # left
+    return perimeter
+
+
 @jitclass(
     [
         ("rows", int32),
@@ -287,15 +300,7 @@ class TileEdgeCells:
     def __init__(self, array: np.ndarray, tile_index: int):
         self.rows = len(array)
         self.cols = len(array[0])
-        self.perimeter = np.empty(2 * (self.rows + self.cols) - 4, dtype=array.dtype)
-
-        # Fill the perimeter array
-        self.perimeter[: self.cols] = array[0]  # top
-        self.perimeter[self.cols : self.cols + self.rows - 2] = array[1:-1, -1]  # right
-        self.perimeter[self.cols + self.rows - 2 : 2 * self.cols + self.rows - 2] = (
-            array[-1, ::-1]
-        )  # bottom
-        self.perimeter[2 * self.cols + self.rows - 2 :] = array[-2:0:-1, 0]  # left
+        self.perimeter = get_tile_perimeter(array)
         self.index_offset = tile_index * self.perimeter.size
 
     def get_index(self, row, col):
