@@ -5,11 +5,12 @@ import heapq
 import tempfile
 import numpy as np
 from numba import njit, int64, prange, int32, float32
+import numba
 from numba.experimental import jitclass
 from osgeo import gdal
 import concurrent.futures
 from numba.typed import List, Dict
-from numba.types import UniTuple, Tuple, Array
+from numba.types import UniTuple, Tuple, Array, ListType
 from .util.raster import (
     raster_chunker,
     RasterChunk,
@@ -307,7 +308,8 @@ def towards_lower_tile(
 
 
 @njit(parallel=True)
-def compute_min_dist(labels_array, labels_edge_cells):
+def compute_min_dist(labels_array):
+    labels_edge_cells = TileEdgeCells(labels_array)
     perimeter = labels_edge_cells.perimeter
     min_dist = np.zeros((perimeter.size, perimeter.size), dtype=np.int32)
     for i in prange(perimeter.size):
@@ -353,7 +355,7 @@ def construct_local_edge_graph(
     labels: TileEdgeCells,
     to_higher: TileEdgeCells,
     to_lower: TileEdgeCells,
-    labels_array: np.ndarray,
+    min_dists: np.ndarray,
 ) -> tuple[list, list, list]:
     # create a list of lists to represent the graph
     # there are at most labels.size() vertices in the graph
@@ -367,7 +369,6 @@ def construct_local_edge_graph(
         graph.append(new_list)
     index_offset = labels.index_offset
 
-    min_dists = compute_min_dist(labels_array, labels)
     ### for i, j in np.ndindex(min_dists.shape):
     ###     if min_dists[i][j] != 0:
     ###         graph[i].append((j + index_offset, min_dists[i][j]))
@@ -773,27 +774,47 @@ def initalize_global_graph(num_tiles, perimeter_cells_per_tile):
     )
 
 
-# @jitclass
+tuple_int64_2_type = UniTuple(int64, 2)
+list_tuple_int64_2_type = ListType(tuple_int64_2_type)
+
+
+@jitclass(
+    [
+        ("tile_count", int64),
+        ("perimeter_cells_per_tile", int64),
+        ("global_graph", ListType(ListType(UniTuple(int64, 2)))),
+        ("global_perimeter_high_edges", ListType(UniTuple(int64, 2))),
+        ("global_perimeter_low_edges", ListType(UniTuple(int64, 2))),
+        ("global_interior_high_edges", ListType(ListType(UniTuple(int64, 2)))),
+        ("global_interior_low_edges", ListType(ListType(UniTuple(int64, 2)))),
+        ("perimeter_elevations", float32[:, :]),
+    ]
+)
 class TiledFixFlatsGlobalData:
-    def __init__(self, raster_shape: tuple[int, int], chunk_size: tuple[int, int]):
+    def __init__(
+        self, raster_shape: tuple[int, int], chunk_size: tuple[int, int] | int
+    ):
+        if isinstance(chunk_size, int):
+            chunk_size = (chunk_size, chunk_size)
         self.tile_count = math.ceil(raster_shape[0] / chunk_size[0]) * math.ceil(
             raster_shape[1] / chunk_size[1]
         )
         self.perimeter_cells_per_tile = 2 * chunk_size[0] + 2 * chunk_size[1] - 4
-        self.global_graph = List()
+
+        self.global_graph = List.empty_list(list_tuple_int64_2_type)
+
         for _ in range(self.tile_count * self.perimeter_cells_per_tile):
-            self.global_graph.append(List.empty_list(Tuple((int64, int64))))
-        self.global_perimeter_high_edges = List.empty_list(Tuple((int64, int64)))
-        self.global_perimeter_low_edges = List.empty_list(Tuple((int64, int64)))
-        self.global_interior_high_edges = List()
-        self.global_interior_low_edges = List()
+            self.global_graph.append(List.empty_list(tuple_int64_2_type))
+        self.global_perimeter_high_edges = List.empty_list(tuple_int64_2_type)
+        self.global_perimeter_low_edges = List.empty_list(tuple_int64_2_type)
+        self.global_interior_high_edges = List.empty_list(list_tuple_int64_2_type)
+        self.global_interior_low_edges = List.empty_list(list_tuple_int64_2_type)
         for _ in range(self.tile_count):
-            self.global_interior_high_edges.append(
-                List.empty_list(Tuple((int64, int64)))
-            )
-            self.global_interior_low_edges.append(
-                List.empty_list(Tuple((int64, int64)))
-            )
+            self.global_interior_high_edges.append(List.empty_list(tuple_int64_2_type))
+            self.global_interior_low_edges.append(List.empty_list(tuple_int64_2_type))
+        self.perimeter_elevations = np.empty(
+            (self.tile_count, self.perimeter_cells_per_tile), dtype=np.float32
+        )
 
 
 def create_labels_and_graph(
@@ -811,13 +832,7 @@ def create_labels_and_graph(
     )
     perimeter_cells_per_tile = 4 * (chunk_size - 2) + 4
 
-    (
-        global_graph,
-        global_perimeter_high_edges,
-        global_perimeter_low_edges,
-        global_interior_high_edges,
-        global_interior_low_edges,
-    ) = initalize_global_graph(num_tiles, perimeter_cells_per_tile)
+    global_data = TiledFixFlatsGlobalData((fdr_band.YSize, fdr_band.XSize), chunk_size)
 
     tile_index = 0
 
@@ -854,20 +869,38 @@ def create_labels_and_graph(
         fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
         fdr_tile.read(fdr_band)
         tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
-        labels = create_labels_and_graph_process_tile(
-            dem_tile.data,
-            fdr_tile.data,
-            tile_index,
-            perimeter_cells_per_tile,
-            tile_index_map,
-            tile_labels,
-            tile_elevations,
-            global_graph,
-            global_perimeter_high_edges,
-            global_perimeter_low_edges,
-            global_interior_high_edges,
-            global_interior_low_edges,
+
+        to_higher, to_lower, labels, high_edges, low_edges = resolve_flats_tile(
+            dem_tile.data, fdr_tile.data
         )
+        to_higher = get_tile_perimeter(to_higher)
+        to_lower = get_tile_perimeter(to_lower)
+        min_dists = compute_min_dist(labels)
+        graph, perimeter_high_edges, perimeter_low_edges = construct_local_edge_graph(
+            TileEdgeCells(labels, tile_index),
+            TileEdgeCells(to_higher, tile_index),
+            TileEdgeCells(to_lower, tile_index),
+            min_dists,
+        )
+        dem = dem_tile.data[1:-1, 1:-1]
+        perimeter_elevations = get_tile_perimeter(dem)
+
+        ## after return
+        # update global data
+        for j, edge in enumerate(graph):
+            global_index = tile_index * perimeter_cells_per_tile + j
+            global_data.global_graph[global_index] = edge
+        for edge in perimeter_high_edges:
+            global_data.global_perimeter_high_edges.append(edge)
+        for edge in perimeter_low_edges:
+            global_data.global_perimeter_low_edges.append(edge)
+        if len(high_edges) > 0:
+            global_data.global_interior_high_edges[tile_index] = high_edges
+        if len(low_edges) > 0:
+            global_data.global_interior_low_edges[tile_index] = low_edges
+        global_data.perimeter_elevations[tile_index] = perimeter_elevations
+
+        # write labels to file
         labels_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 0)
         labels_tile.from_numpy(labels)
         labels_tile.write(labels_tile_band)
@@ -877,15 +910,7 @@ def create_labels_and_graph(
     labels_tile_ds.FlushCache()
     labels_tile_ds = None
     labels_tile_band = None
-    return (
-        tile_labels,
-        tile_elevations,
-        global_graph,
-        global_perimeter_high_edges,
-        global_perimeter_low_edges,
-        global_interior_high_edges,
-        global_interior_low_edges,
-    )
+    return global_data
 
 
 @njit
@@ -1089,15 +1114,7 @@ def fix_flats(
     num_tile_cols = math.ceil(dem_band.XSize / chunk_size)
 
     # create labels and graph for each tile
-    (
-        tile_labels,
-        tile_elevations,
-        global_graph,
-        global_perimeter_high_edges,
-        global_perimeter_low_edges,
-        global_interior_high_edges,
-        global_interior_low_edges,
-    ) = create_labels_and_graph(
+    global_data = create_labels_and_graph(
         dem_band,
         fdr_band,
         chunk_size,
@@ -1106,35 +1123,35 @@ def fix_flats(
         dem_ds.GetProjection(),
     )
 
-    # complete the graph by connecting the neighboring tiles
-    complete_graph(
-        tile_labels, tile_elevations, num_tile_rows, num_tile_cols, global_graph
-    )
-
-    # solve the graph for the low and high terrain nodes
-    min_dist_low = solve_low_graph(global_graph, global_perimeter_low_edges)
-    min_dist_high = solve_high_graph(
-        global_graph, global_perimeter_high_edges, min_dist_low
-    )
-
-    # create the flat mask for each tile
-    create_flat_mask(
-        num_tile_rows,
-        num_tile_cols,
-        chunk_size,
-        working_dir,
-        dem_band,
-        dem_ds,
-        fdr_band,
-        tile_labels,
-        global_interior_high_edges,
-        global_interior_low_edges,
-        min_dist_high,
-        min_dist_low,
-    )
-
-    # update the flow direction raster
-    update_fdr(dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size)
+    # # complete the graph by connecting the neighboring tiles
+    # complete_graph(
+    #     tile_labels, tile_elevations, num_tile_rows, num_tile_cols, global_graph
+    # )
+    #
+    # # solve the graph for the low and high terrain nodes
+    # min_dist_low = solve_low_graph(global_graph, global_perimeter_low_edges)
+    # min_dist_high = solve_high_graph(
+    #     global_graph, global_perimeter_high_edges, min_dist_low
+    # )
+    #
+    # # create the flat mask for each tile
+    # create_flat_mask(
+    #     num_tile_rows,
+    #     num_tile_cols,
+    #     chunk_size,
+    #     working_dir,
+    #     dem_band,
+    #     dem_ds,
+    #     fdr_band,
+    #     tile_labels,
+    #     global_interior_high_edges,
+    #     global_interior_low_edges,
+    #     min_dist_high,
+    #     min_dist_low,
+    # )
+    #
+    # # update the flow direction raster
+    # update_fdr(dem_band, fdr_band, fixed_fdr_band, working_dir, chunk_size)
 
     if cleanup_working_dir:
         shutil.rmtree(working_dir)
