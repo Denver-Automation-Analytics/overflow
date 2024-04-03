@@ -274,7 +274,7 @@ def away_from_higher_tile(
                 interior_high_edges.push((neighbor_row, neighbor_col))
 
 
-# @njit
+@njit
 def towards_lower_tile(
     interior_low_edges,
     exterior_low_edges,
@@ -380,51 +380,50 @@ def construct_local_edge_graph(
     index_offset = labels.index_offset
 
     min_dists = compute_min_dist(labels_array, labels)
-    # for i, dists in min_dists.items():
-    #     for j, dist in enumerate(dists):
-    #         if dist != -1:
-    #             graph[i].append((j + index_offset, dist))
-    #             graph[j].append((i + index_offset, dist))
+    for i, j in np.ndindex(min_dists.shape):
+        if min_dists[i][j] != 0:
+            graph[i].append((j + index_offset, min_dists[i][j]))
+            graph[j].append((i + index_offset, min_dists[i][j]))
 
-    for i, label in enumerate(labels.perimeter):
-        if label == 0:
-            # this cell is not part of a flat
-            continue
-        # walk around the perimeter and connect neighboring cells in the same group
-        # a neighboring cell is defined as the next or previous cell with the same label
-        # as seen by continuing clockwise around the perimeter, not necessarily the
-        # cell directly adjacent in the grid
-        for j in range(i + 1, labels.size() + 1):
-            k = j % labels.size()
-            if k != i and labels.perimeter[k] == label:
-                dist = min_dists[i][k]
-                graph[i].append((k + index_offset, dist))
-                graph[k].append((i + index_offset, dist))
-                break
-        # connect non-neighboring cells to each other if they are part of the same group
-        # we can skip any edges where there exist other paths that have the shortest
-        # distances. For example, if the difference in the distances of vertex i to two
-        # vertices (j and k) equals the distance of the
-        # two end vertices to each other, only the closest vertex should be connected
-        # since the path containing the vertices in between is among the shortest
-        # paths between the two end vertices.
-        # Theoretically, a fully connected graph would produce identical results.
-        # However, this method is used to reduce the number of unnecessary edges in the graph.
-        for j in range(i + 2, labels.size()):
-            if labels.perimeter[j] != label:
-                # this cell is not part of the same flat
-                continue
-            dist_ij = min_dists[i][j]
-            for k in range(i + 1, j):
-                if labels.perimeter[k] != label:
-                    continue
-                dist_ik = min_dists[i][k]
-                dist_kj = min_dists[k][j]
-                if dist_ij == dist_ik + dist_kj:
-                    break
-            else:
-                graph[i].append((j + index_offset, dist_ij))
-                graph[j].append((i + index_offset, dist_ij))
+    ### for i, label in enumerate(labels.perimeter):
+    ###     if label == 0:
+    ###         # this cell is not part of a flat
+    ###         continue
+    ###     # walk around the perimeter and connect neighboring cells in the same group
+    ###     # a neighboring cell is defined as the next or previous cell with the same label
+    ###     # as seen by continuing clockwise around the perimeter, not necessarily the
+    ###     # cell directly adjacent in the grid
+    ###     for j in range(i + 1, labels.size() + 1):
+    ###         k = j % labels.size()
+    ###         if k != i and labels.perimeter[k] == label:
+    ###             dist = min_dists[i][k]
+    ###             graph[i].append((k + index_offset, dist))
+    ###             graph[k].append((i + index_offset, dist))
+    ###             break
+    ###     # connect non-neighboring cells to each other if they are part of the same group
+    ###     # we can skip any edges where there exist other paths that have the shortest
+    ###     # distances. For example, if the difference in the distances of vertex i to two
+    ###     # vertices (j and k) equals the distance of the
+    ###     # two end vertices to each other, only the closest vertex should be connected
+    ###     # since the path containing the vertices in between is among the shortest
+    ###     # paths between the two end vertices.
+    ###     # Theoretically, a fully connected graph would produce identical results.
+    ###     # However, this method is used to reduce the number of unnecessary edges in the graph.
+    ###     for j in range(i + 2, labels.size()):
+    ###         if labels.perimeter[j] != label:
+    ###             # this cell is not part of the same flat
+    ###             continue
+    ###         dist_ij = min_dists[i][j]
+    ###         for k in range(i + 1, j):
+    ###             if labels.perimeter[k] != label:
+    ###                 continue
+    ###             dist_ik = min_dists[i][k]
+    ###             dist_kj = min_dists[k][j]
+    ###             if dist_ij == dist_ik + dist_kj:
+    ###                 break
+    ###         else:
+    ###             graph[i].append((j + index_offset, dist_ij))
+    ###             graph[j].append((i + index_offset, dist_ij))
 
     # connect each cell to the high/low terrain node
     high_edges = List()
@@ -827,7 +826,7 @@ def complete_graph(tile_labels, rows, cols, global_graph):
             )
 
 
-# @njit(parallel=True)
+@njit(parallel=True)
 def create_flat_mask_process_batch(
     tile_indices,
     chunk_size,
