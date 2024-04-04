@@ -280,7 +280,7 @@ def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
         ("rows", int32),
         ("cols", int32),
         ("index_offset", int32),
-        ("perimeter", int32[:]),
+        ("perimeter", float32[:]),
     ]
 )
 class TileEdgeCells:
@@ -398,48 +398,6 @@ class TileEdgeCells:
         Returns the cell at the specified corner of the perimeter.
         """
         return self.perimeter[self.get_index_corner(corner)]
-
-    def distance(
-        self,
-        index: int,
-        other_index: int,
-        labels_array: np.ndarray,
-    ) -> int:
-        """
-        Returns the Chebyshev distance between two cells specified by their flattened indices.
-
-        The Chebyshev distance is the maximum of the absolute differences between the row and column coordinates.
-        """
-        from_row, from_col = self.get_row_col(index)
-        to_row, to_col = self.get_row_col(other_index)
-        chebyshev_distance = max(abs(from_row - to_row), abs(from_col - to_col))
-        if chebyshev_distance <= 1:
-            return chebyshev_distance
-        dist = 0
-        label = labels_array[from_row, from_col]
-        visited = np.zeros_like(labels_array, dtype=np.bool_)
-        visited[from_row, from_col] = True
-        marker = (-1, -1)
-        queue = Queue([(from_row, from_col)])
-        queue.push(marker)
-        while len(queue) > 1:
-            row, col = queue.pop()
-            if (row, col) == marker:
-                dist += 1
-                queue.push(marker)
-                continue
-            if (row, col) == (to_row, to_col):
-                return dist
-            for neighbor_row, neighbor_col in neighbor_generator(
-                row, col, self.rows, self.cols
-            ):
-                if (
-                    labels_array[neighbor_row, neighbor_col] == label
-                    and not visited[neighbor_row, neighbor_col]
-                ):
-                    visited[neighbor_row, neighbor_col] = True
-                    queue.push((neighbor_row, neighbor_col))
-        return dist
 
 
 @njit

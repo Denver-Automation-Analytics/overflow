@@ -260,7 +260,9 @@ def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
 
 
 @njit(parallel=True)
-def d8_masked_flow_dirs(dem, flat_mask: np.ndarray, fdr: np.ndarray) -> None:
+def d8_masked_flow_dirs(
+    dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray
+) -> None:
     """
     Determine flow directions across flats using the provided flat_mask and labels arrays.
     This is algorithm 7 from the paper https://rbarnes.org/sci/2014_flats.pdf.
@@ -311,3 +313,30 @@ def d8_masked_flow_dirs(dem, flat_mask: np.ndarray, fdr: np.ndarray) -> None:
                     min_slope = slope
                     nmin = FLOW_DIRECTIONS[i]
             fdr[row, col] = nmin
+
+
+@njit
+def fix_flats(
+    dem: np.ndarray, flow_dirs: np.ndarray, in_place: bool = True
+) -> np.ndarray | None:
+    """Fix flat areas in a digital elevation model by assigning flow directions to flat areas.
+    This function uses the algorithm described in the paper https://rbarnes.org/sci/2014_flats.pdf
+    to assign flow directions to flat areas in a digital elevation model.
+
+
+    Args:
+        dem (np.ndarray): The digital elevation model
+        flow_dirs (np.ndarray): The flow direction raster with flat areas
+        in_place (bool, optional): Whether to modify the flow_dirs array in place. Defaults to False.
+
+    Returns:
+        np.ndarray | None: The flow direction raster with flat areas fixed or None if in_place is True
+    """
+    flat_mask = resolve_flats(dem, flow_dirs)
+    if in_place:
+        d8_masked_flow_dirs(dem, flat_mask, flow_dirs)
+        return None
+    else:
+        flow_dirs_copy = flow_dirs.copy()
+        d8_masked_flow_dirs(dem, flat_mask, flow_dirs_copy)
+        return flow_dirs_copy
