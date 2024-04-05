@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from numba import njit, prange
-from numba.typed import List
+from numba.typed import List  # pylint: disable=no-name-in-module
 from overflow.util.raster import neighbor_generator
 from overflow.constants import (
     NEIGHBOR_OFFSETS,
