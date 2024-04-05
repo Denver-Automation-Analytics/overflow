@@ -68,6 +68,8 @@ class LocalGraph:
                     self.flat_edges[j].append((i + index_offset, dist_ij))
 
         # connect each cell to the high/low terrain node
+        self.high_edges = List.empty_list(Int64Pair)
+        self.low_edges = List.empty_list(Int64Pair)
         for i, distance in enumerate(to_higher_perimeter):
             if distance == 0:
                 continue
@@ -112,6 +114,7 @@ class GlobalGraph:
         for i in range(self.tile_rows - 1):
             for j in range(self.tile_cols - 1):
                 pass
+                # TODO
                 # join_adjacent_tiles()
 
     def _djikstra_dist_to_edge(self, edge_type: str, dist_to_low_edge: dict = {}):
@@ -162,28 +165,6 @@ class GlobalGraph:
             perimeter_distances[tile_index, cell_index] = v
         return perimeter_distances
 
-    def _get_tile_exterior_edges(self, tile_index, perimeter_distances):
-        exterior_edges = List()
-        max_loops = 0
-        loop_index_map = {}
-        index = 0
-        for dist_to_edge_tile in perimeter_distances[tile_index]:
-            dist_to_edge_data = TileData(dist_to_edge_tile, 0)
-            for i, dist in enumerate(dist_to_edge_tile):
-                if dist <= 1:
-                    continue
-                row, col = dist_to_edge_data.get_row_col(i)
-                if dist not in loop_index_map:
-                    max_loops = max(max_loops, dist)
-                    loop_index_map[dist] = index
-                    index += 1
-                    new_edge = List()
-                    new_edge.append((row, col))
-                    exterior_edges.append(new_edge)
-                else:
-                    exterior_edges[loop_index_map[dist]].append((row, col))
-        return exterior_edges, max_loops, loop_index_map
-
     def solve_graph(self):
         # results in exterior_edges for high and low terrain
         # with max loops and index map for each tile
@@ -206,17 +187,4 @@ class GlobalGraph:
             self.tile_rows * self.tile_cols,
         )
 
-        # get_tile_exterior_edges for all tiles
-        # can't have lists of dicts in numba
-        global_high_exterior_edges = List()
-        global_max_high_loops = []
-        global_loop_index_map_high = []
-        global_low_exterior_edges = List()
-        global_max_low_loops = []
-        global_loop_index_map_low = []
-
-        # we need for both low and high terrain
-        # interior_edges,
-        # exterior_edges,
-        # loop_index_map,
-        # max_high_loop,
+        return dist_to_low_edge_tiles, dist_to_high_tiles
