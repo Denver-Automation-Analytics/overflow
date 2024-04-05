@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 from osgeo import gdal
 
-from overflow.fix_flats.tiled.fix_flats import fix_flats_tiled
+from overflow.fix_flats.tiled.fix_flats_tiled import fix_flats_tiled
 from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_NODATA,
@@ -289,4 +289,6 @@ def test_fix_flats_tiled(
     )
     fixed_fdr_dataset = gdal.Open(output_filepath)
     fixed_fdr = fixed_fdr_dataset.GetRasterBand(1).ReadAsArray()
+    flat_mask_dataset = gdal.Open(f"/vsimem/{chunk_size}/flat_mask.tif")
+    flat_mask = flat_mask_dataset.GetRasterBand(1).ReadAsArray()
     assert np.array_equal(fixed_fdr, expected_fixed_fdr_zhou_2022)

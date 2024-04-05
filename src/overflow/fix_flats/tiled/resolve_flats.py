@@ -1,13 +1,13 @@
 from numba import njit
-from numba.typed import List
+from numba.typed import List  # pylint: disable=no-name-in-module
 import numpy as np
 from overflow.constants import FLOW_DIRECTION_UNDEFINED, FLOW_DIRECTION_NODATA
 from overflow.util.raster import neighbor_generator
 from overflow.fix_flats.core.fix_flats import label_flats
-from overflow.util.numba_datastructures import Queue
+from overflow.util.queue import Queue
 
 
-@njit
+@njit(cache=True)
 def compute_gradient(
     labels: np.ndarray,
     fdr: np.ndarray,
@@ -66,10 +66,19 @@ def compute_gradient(
     return graident
 
 
-@njit
+@njit(cache=True)
 def flat_edges_tile(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
-    """TODO"""
-    # FIFO queues for the high and low edge cells
+    """
+    Detects high and low edge cells in a tile. This is the tiled version of Algorithm 3 FlatEdges
+    from https://rbarnes.org/sci/2014_flats.pdf
+
+    Args:
+        dem (np.ndarray): Digital Elevation Model array.
+        fdr (np.ndarray): Flow direction array.
+
+    Returns:
+        Tuple[list, list]: Lists of high and low edge cells.
+    """
     high_edges = List()
     low_edges = List()
 
@@ -102,7 +111,7 @@ def flat_edges_tile(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     return high_edges, low_edges
 
 
-@njit
+@njit(cache=True)
 def compute_labels_and_gradients(
     dem: np.ndarray, flow_dirs: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:

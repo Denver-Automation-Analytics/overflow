@@ -1,12 +1,30 @@
-from numba.experimental import jitclass
-from overflow.numba_types import Int64PairListList, Int64PairList, Int64Pair
-from numba.typed import List
-import numpy as np
 import heapq
+from numba.experimental import jitclass
+from numba.typed import List  # pylint: disable=no-name-in-module
+from numba.types import Array
+from numba import int64
+import numpy as np
+from overflow.numba_types import Int64PairListList, Int64PairList, Int64Pair
+from overflow.util.raster import Corner, Side
+from overflow.util.perimeter import Float32Perimeter
 
 
 @jitclass
 class LocalGraph:
+    """
+    Represents a local graph for a tile in the DEM.
+
+    This class constructs a local graph for a tile by connecting neighboring cells in the same flat
+    and connecting each cell to the high/low terrain nodes. It also reduces unnecessary edges by
+    skipping edges where shorter paths exist between the same vertices.
+
+    Attributes:
+        flat_edges (Int64PairListList): A list of lists containing the edges connecting cells in the same flat.
+        high_edges (Int64PairList): A list of edges connecting cells to the high terrain node.
+        low_edges (Int64PairList): A list of edges connecting cells to the low terrain node.
+        tile_index (int): The index of the tile in the global DEM.
+    """
+
     flat_edges: Int64PairListList
     high_edges: Int64PairList
     low_edges: Int64PairList
@@ -83,9 +101,28 @@ class LocalGraph:
 
 @jitclass
 class GlobalGraph:
+    """
+    Represents the global graph of the DEM.
+
+    This class constructs the global graph by connecting adjacent tiles and solving the shortest
+    paths from each cell to the high and low terrain nodes using Dijkstra's algorithm.
+
+    Attributes:
+        flat_edges (Int64PairListList): A list of lists containing the edges connecting cells in the same flat.
+        high_edges (Int64PairList): A list of edges connecting cells to the high terrain node.
+        low_edges (Int64PairList): A list of edges connecting cells to the low terrain node.
+        solved_high_edges (Array(int64, 1, "C")): An array containing the solved distances from each cell to the high terrain node.
+        solved_low_edges (Array(int64, 1, "C")): An array containing the solved distances from each cell to the low terrain node.
+        tile_rows (int): The number of rows of tiles in the DEM.
+        tile_cols (int): The number of columns of tiles in the DEM.
+        perimeter_cells_per_tile (int): The number of perimeter cells per tile.
+    """
+
     flat_edges: Int64PairListList
     high_edges: Int64PairList
     low_edges: Int64PairList
+    solved_high_edges: Array(int64, 1, "C")
+    solved_low_edges: Array(int64, 1, "C")
     tile_rows: int
     tile_cols: int
     perimeter_cells_per_tile: int
@@ -100,8 +137,16 @@ class GlobalGraph:
             self.flat_edges.append(List.empty_list(Int64Pair))
         self.high_edges = List.empty_list(Int64Pair)
         self.low_edges = List.empty_list(Int64Pair)
+        self.solved_high_edges = np.zeros(size, dtype=np.int64)
+        self.solved_low_edges = np.zeros(size, dtype=np.int64)
 
     def add(self, local_graph: LocalGraph):
+        """
+        Add a LocalGraph to the GlobalGraph.
+
+        Args:
+            local_graph (LocalGraph): The LocalGraph object to be added.
+        """
         for local_index, edge in enumerate(local_graph.flat_edges):
             global_index = local_index + local_graph.tile_index * len(
                 local_graph.flat_edges
@@ -110,81 +155,183 @@ class GlobalGraph:
         self.high_edges.extend(local_graph.high_edges)
         self.low_edges.extend(local_graph.low_edges)
 
-    def join(self):
-        for i in range(self.tile_rows - 1):
-            for j in range(self.tile_cols - 1):
-                pass
-                # TODO
-                # join_adjacent_tiles()
+    def _join_neighbors(self, i: int, j: int):
+        self.flat_edges[i].append((j, 1))
+        self.flat_edges[j].append((i, 1))
 
-    def _djikstra_dist_to_edge(self, edge_type: str, dist_to_low_edge: dict = {}):
-        dist_to_edge = {}
+    def _handle_edge(
+        self,
+        elevations_a: Float32Perimeter,
+        elevations_b: Float32Perimeter,
+        side_a: Side,
+        side_b: Side,
+    ):
+        """
+        Handle the edge between two adjacent tiles.
+
+        Args:
+            elevations_a (Float32Perimeter): The elevation perimeter of the first tile.
+            elevations_b (Float32Perimeter): The elevation perimeter of the second tile.
+            side_a (Side): The side of the first tile that is adjacent to the second tile.
+            side_b (Side): The side of the second tile that is adjacent to the first tile.
+        """
+        elevations_a_side = elevations_a.get_side(side_a)
+        elevations_b_side = elevations_b.get_side(side_b)
+        for i, elev_a in enumerate(elevations_a_side):
+            elev_b = elevations_b_side[i]
+            global_index_a = (
+                elevations_a.get_index_side(side_a, i) + elevations_a.index_offset
+            )
+            # if the neighboring cell directly adjacent is part of the same flat, connect this cell to it
+            if elev_a == elev_b:
+                global_index_b = (
+                    elevations_b.get_index_side(side_b, i) + elevations_b.index_offset
+                )
+                self._join_neighbors(global_index_a, global_index_b)
+            # if the neighboring cell diagonally is part of the same flat, connect this cell to it
+            if i != 0 and elev_a == elevations_b_side[i - 1]:
+                global_index_b = (
+                    elevations_b.get_index_side(side_b, i - 1)
+                    + elevations_b.index_offset
+                )
+                self._join_neighbors(global_index_a, global_index_b)
+            if i != elevations_a_side.size - 1 and elev_a == elevations_b_side[i + 1]:
+                global_index_b = (
+                    elevations_b.get_index_side(side_b, i + 1)
+                    + elevations_b.index_offset
+                )
+                self._join_neighbors(global_index_a, global_index_b)
+
+    def _handle_corner(
+        self,
+        elevations_a: Float32Perimeter,
+        elevations_b: Float32Perimeter,
+        corner_a: Corner,
+        corner_b: Corner,
+    ):
+        """
+        Handle the corner between two adjacent tiles.
+
+        Args:
+            elevations_a (Float32Perimeter): The elevation perimeter of the first tile.
+            elevations_b (Float32Perimeter): The elevation perimeter of the second tile.
+            corner_a (Corner): The corner of the first tile that is adjacent to the second tile.
+            corner_b (Corner): The corner of the second tile that is adjacent to the first tile.
+        """
+        elev_a = elevations_a.get_corner(corner_a)
+        elev_b = elevations_b.get_corner(corner_b)
+        if elev_a == elev_b:
+            global_index_a = (
+                elevations_a.get_index_corner(corner_a) + elevations_a.index_offset
+            )
+            global_index_b = (
+                elevations_b.get_index_corner(corner_b) + elevations_b.index_offset
+            )
+            self._join_neighbors(global_index_a, global_index_b)
+
+    def join_adjacent_tiles(
+        self,
+        elevations_a: Float32Perimeter,
+        elevations_b: Float32Perimeter,
+        elevations_c: Float32Perimeter,
+        elevations_d: Float32Perimeter,
+    ):
+        """
+        Join adjacent tiles in the global graph.
+
+        Args:
+            elevations_a (Float32Perimeter): The elevation perimeter of tile A.
+            elevations_b (Float32Perimeter): The elevation perimeter of tile B.
+            elevations_c (Float32Perimeter): The elevation perimeter of tile C.
+            elevations_d (Float32Perimeter): The elevation perimeter of tile D.
+
+        The adjacent tiles are represented as follows:
+        + - - + - - +
+        |  A  |  B  |
+        + - - * - - +
+        |  C  |  D  |
+        + - - + - - +
+        """
+        # connect edge A-B
+        self._handle_edge(elevations_a, elevations_b, Side.RIGHT, Side.LEFT)
+        # connect edge B-D
+        self._handle_edge(elevations_b, elevations_d, Side.BOTTOM, Side.TOP)
+        # connect edge D-C
+        self._handle_edge(elevations_d, elevations_c, Side.LEFT, Side.RIGHT)
+        # connect edge C-A
+        self._handle_edge(elevations_c, elevations_a, Side.TOP, Side.BOTTOM)
+        # connect corner A-D
+        self._handle_corner(
+            elevations_a, elevations_d, Corner.BOTTOM_RIGHT, Corner.TOP_LEFT
+        )
+        # connect corner B-C
+        self._handle_corner(
+            elevations_b, elevations_c, Corner.BOTTOM_LEFT, Corner.TOP_RIGHT
+        )
+
+    def _init_heap(self, edges: Int64PairList, solved_edges: np.ndarray) -> list:
+        """
+        Initialize the priority queue for Dijkstra's algorithm.
+
+        Args:
+            edges (Int64PairList): The edges to be added to the priority queue.
+            solved_edges (Array(int64, 1, "C")): The array to store the solved distances.
+
+        Returns:
+            List(Int64Pair): The initialized priority queue.
+        """
         pq = List.empty_list(Int64Pair)
+        for neighbor, weight in edges:
+            # ignore low edge cells for distance to high edge calculation
+            if self.solved_low_edges[neighbor] == 1:
+                continue
+            solved_edges[neighbor] = weight
+            heapq.heappush(pq, (weight, neighbor))
+        return pq
 
-        # populate pq with the terrain node and its neighbors
-        def populate_edges(edges):
-            for neighbor, weight in edges:
-                # ignore low edge cells for distance to high edge calculation
-                if neighbor in dist_to_low_edge and dist_to_low_edge[neighbor] == 1:
-                    continue
-                dist_to_edge[neighbor] = weight
-                heapq.heappush(pq, (weight, neighbor))
+    def _djikstra_dist_to_edge(self, edge_type: str):
+        """
+        Calculate the shortest distances from each cell to the specified edge type using Dijkstra's algorithm.
 
-        if edge_type == "low":
-            populate_edges(self.low_edges)
-        elif edge_type == "high":
-            populate_edges(self.high_edges)
-        else:
-            raise ValueError(f"Invalid edge_type: {edge_type}")
-
+        Args:
+            edge_type (str): The type of edge to calculate distances to. Can be "low" or "high".
+        """
+        solved_edges = (
+            self.solved_low_edges if edge_type == "low" else self.solved_high_edges
+        )
+        pq = self._init_heap(
+            self.low_edges if edge_type == "low" else self.high_edges, solved_edges
+        )
         while pq:
             dist, node = heapq.heappop(pq)
-            if dist > dist_to_edge[node]:
+            if 0 < solved_edges[node] < dist:
                 continue
             for neighbor, weight in self.flat_edges[node]:
                 # ignore low edge cells for distance to high edge calculation
-                if neighbor in dist_to_low_edge and dist_to_low_edge[neighbor] == 1:
+                if self.solved_low_edges[neighbor] == 1:
                     continue
                 if (
-                    neighbor not in dist_to_edge
-                    or dist + weight < dist_to_edge[neighbor]
+                    solved_edges[neighbor] == 0
+                    or dist + weight < solved_edges[neighbor]
                 ):
-                    dist_to_edge[neighbor] = dist + weight
+                    solved_edges[neighbor] = dist + weight
                     heapq.heappush(pq, (dist + weight, neighbor))
-        return dist_to_edge
+        if edge_type == "low":
+            self.solved_low_edges = solved_edges
+        else:
+            self.solved_high_edges = solved_edges
 
-    def _extract_perimeter_distances(
-        self, dist_to_edge, perimeter_cells_per_tile, tile_count
-    ):
-        perimeter_distances = np.full(
-            (tile_count, perimeter_cells_per_tile), -1, dtype=np.int64
-        )
-        for k, v in dist_to_edge.items():
-            tile_index = k // perimeter_cells_per_tile
-            cell_index = k % perimeter_cells_per_tile
-            perimeter_distances[tile_index, cell_index] = v
-        return perimeter_distances
+    def solve_graph(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Solve the global graph by calculating the shortest distances from each cell to the high and low terrain nodes.
 
-    def solve_graph(self):
-        # results in exterior_edges for high and low terrain
-        # with max loops and index map for each tile
-        # see solve high graph, solve low graph, and get_tile_exterior_edges
-
-        dist_to_low_edge = self._djikstra_dist_to_edge("low")
-        dist_to_high_edge = self._djikstra_dist_to_edge("high", dist_to_low_edge)
-        # now get a map of all cells on the perimeter of each tile and the
-        # distances to the nearest high and low edges
-
-        dist_to_low_edge_tiles = self._extract_perimeter_distances(
-            dist_to_low_edge,
-            self.perimeter_cells_per_tile,
-            self.tile_rows * self.tile_cols,
-        )
-
-        dist_to_high_tiles = self._extract_perimeter_distances(
-            dist_to_high_edge,
-            self.perimeter_cells_per_tile,
-            self.tile_rows * self.tile_cols,
-        )
-
-        return dist_to_low_edge_tiles, dist_to_high_tiles
+        Returns:
+            tuple: A tuple containing two 2D arrays of the solved high and low edge distances for each tile.
+        """
+        self._djikstra_dist_to_edge("low")
+        self._djikstra_dist_to_edge("high")
+        tile_count = self.tile_rows * self.tile_cols
+        # return 2D arrays of the solved high and low edge distances
+        return self.solved_low_edges.reshape(
+            (tile_count, self.perimeter_cells_per_tile)
+        ), self.solved_high_edges.reshape((tile_count, self.perimeter_cells_per_tile))

@@ -1,14 +1,12 @@
-import numpy as np
 from numba.experimental import jitclass
-from numba.types import ListType
-from numba.typed import List
 from numba import njit, float32, int64
+from numba.types import ListType
+from numba import int64
+import numpy as np
 from overflow.util.raster import Corner, Side
-from overflow.fix_flats.tiled.graphs import GlobalGraph
-from overflow.numba_types import Int64PairListList, Int64PairList, Int64Pair
 
 
-@njit
+@njit(cache=True)
 def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
     rows = len(array)
     cols = len(array[0])
@@ -46,11 +44,9 @@ def create_perimeter_class(numba_type):
         index_offset: int
         data: np.ndarray
 
-        def __init__(
-            self, data: np.ndarray, tile_rows: int, tile_cols: int, tile_index: int
-        ):
-            self.rows = tile_rows
-            self.cols = tile_cols
+        def __init__(self, data: np.ndarray, rows: int, cols: int, tile_index: int):
+            self.rows = rows
+            self.cols = cols
             self.data = data
             self.index_offset = tile_index * self.data.size
 
@@ -157,20 +153,3 @@ Float32Perimeter = create_perimeter_class(float32)
 Int64Perimeter = create_perimeter_class(int64)
 
 Float32PerimeterList = ListType(Float32Perimeter.class_type.instance_type)
-
-
-@jitclass
-class GlobalState:
-    graph: GlobalGraph
-    elevations: Float32PerimeterList
-    interior_low_edges: Int64PairListList
-    interior_high_edges: Int64PairListList
-
-    def __init__(self, tile_rows: int, tile_cols: int, perimeter_cells_per_tile: int):
-        self.graph = GlobalGraph(tile_rows, tile_cols, perimeter_cells_per_tile)
-        tile_count = tile_rows * tile_cols
-        self.elevations = List(
-            [Float32Perimeter(np.empty(0, dtype=np.float32), 0, 0, 0)] * tile_count
-        )
-        self.interior_low_edges = List([List.empty_list(Int64Pair)] * tile_count)
-        self.interior_high_edges = List([List.empty_list(Int64Pair)] * tile_count)

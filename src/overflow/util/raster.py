@@ -1,13 +1,11 @@
 from enum import Enum
-import os
 from typing import Generator, Any
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
-from numba import int64, float32, njit, int32
+from numba import int64, float32, njit
 from numba.experimental import jitclass
 from overflow.constants import NEIGHBOR_OFFSETS
-from overflow.util.numba_datastructures import Queue
 
 gdal.UseExceptions()
 
@@ -28,6 +26,8 @@ def gdal_data_type_to_numpy_data_type(gdal_dtype: int) -> np.dtype:
         "Int16": np.int16,
         "UInt32": np.uint32,
         "Int32": np.int32,
+        "UInt64": np.uint64,
+        "Int64": np.int64,
         "Float32": np.float32,
         "Float64": np.float64,
         "CInt16": np.complex64,
@@ -264,6 +264,10 @@ class Corner(Enum):
 
 @njit
 def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
+    """
+    Get the perimeter of a 2D array (tile) as a 1D array.
+    The perimeter is ordered in a clockwise direction starting from the top-left corner.
+    """
     rows = len(array)
     cols = len(array[0])
     perimeter = np.empty(2 * (rows + cols) - 4, dtype=array.dtype)
@@ -273,131 +277,6 @@ def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
     perimeter[cols + rows - 2 : 2 * cols + rows - 2] = array[-1, ::-1]  # bottom
     perimeter[2 * cols + rows - 2 :] = array[-2:0:-1, 0]  # left
     return perimeter
-
-
-@jitclass(
-    [
-        ("rows", int32),
-        ("cols", int32),
-        ("index_offset", int32),
-        ("perimeter", float32[:]),
-    ]
-)
-class TileEdgeCells:
-    """
-    A class representing the cells on the perimeter of a 2D array (tile).
-
-    The perimeter cells are stored in a flattened 1D array in a clockwise order
-    starting from the top-left corner.
-
-    Attributes:
-        rows (int): The number of rows in the original 2D array.
-        cols (int): The number of columns in the original 2D array.
-        index_offset (int): The offset to add to the flattened index to get the index in the global array
-        perimeter (np.ndarray): A 1D contiguous array containing the flattened perimeter cells.
-    """
-
-    def __init__(self, array: np.ndarray, tile_index: int):
-        self.rows = len(array)
-        self.cols = len(array[0])
-        self.perimeter = get_tile_perimeter(array)
-        self.index_offset = tile_index * self.perimeter.size
-
-    def get_index(self, row, col):
-        """
-        Returns the flattened index of the cell at the given (row, col) coordinates.
-        """
-        if row == 0:
-            return col
-        elif row == self.rows - 1:
-            return self.cols + self.rows - 2 + self.cols - col - 1
-        elif col == self.cols - 1:
-            return self.cols + row - 1
-        else:
-            return 2 * self.cols + self.rows - 2 + self.rows - row - 2
-
-    def get_index_corner(self, corner: Corner):
-        """
-        Returns the flattened index of the cell at the specified corner.
-        """
-        if corner == Corner.TOP_LEFT:
-            return self.get_index(0, 0)
-        elif corner == Corner.TOP_RIGHT:
-            return self.get_index(0, self.cols - 1)
-        elif corner == Corner.BOTTOM_RIGHT:
-            return self.get_index(self.rows - 1, self.cols - 1)
-        elif corner == Corner.BOTTOM_LEFT:
-            return self.get_index(self.rows - 1, 0)
-        else:
-            raise ValueError("Invalid corner")
-
-    def get_index_side(self, side: Side, index: int):
-        """
-        Returns the flattened index of the cell at the specified side and index.
-        """
-        if side == Side.TOP:
-            return self.get_index(0, index)
-        elif side == Side.RIGHT:
-            return self.get_index(index, self.cols - 1)
-        elif side == Side.BOTTOM:
-            return self.get_index(self.rows - 1, index)
-        elif side == Side.LEFT:
-            return self.get_index(index, 0)
-        else:
-            raise ValueError("Invalid side")
-
-    def get_row_col(self, index):
-        """
-        Returns the (row, col) coordinates of the cell at the given flattened index.
-        """
-        if index < self.cols:
-            return 0, index
-        elif index < self.cols + self.rows - 1:
-            return index - self.cols + 1, self.cols - 1
-        elif index < 2 * self.cols + self.rows - 2:
-            return self.rows - 1, 2 * self.cols + self.rows - index - 3
-        else:
-            return 2 * self.cols + 2 * self.rows - index - 4, 0
-
-    def size(self):
-        """
-        Returns the total number of cells in the perimeter.
-        """
-        return self.perimeter.size
-
-    def get_side(self, side: Side):
-        """
-        Returns the cells on the specified side of the perimeter.
-        """
-        if side == Side.TOP:
-            # The enitire top edge (from left to right) includes the corners
-            return self.perimeter[: self.cols]
-        elif side == Side.RIGHT:
-            # The enitire right edge (from top to bottom) includes the corners
-            return self.perimeter[self.cols - 1 : self.cols + self.rows - 1]
-        elif side == Side.BOTTOM:
-            # The enitire bottom edge (from left to right) includes the corners
-            return self.perimeter[
-                self.cols + self.rows - 2 : 2 * self.cols + self.rows - 2
-            ][
-                ::-1
-            ]  # reversed from internal representation
-        elif side == Side.LEFT:
-            # The entire left edge (from bottom to top) includes the corners
-            indices = np.empty(self.rows, dtype=np.int32)
-            indices[0] = 0
-            indices[1:] = np.arange(
-                self.perimeter.size - 1, self.perimeter.size - self.rows, -1
-            )
-            return self.perimeter[indices]
-        else:
-            raise ValueError("Invalid side")
-
-    def get_corner(self, corner: Corner):
-        """
-        Returns the cell at the specified corner of the perimeter.
-        """
-        return self.perimeter[self.get_index_corner(corner)]
 
 
 @njit

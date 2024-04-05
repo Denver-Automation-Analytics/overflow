@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
-from overflow.util.raster import TileEdgeCells, Side, Corner
+from overflow.util.raster import Side, Corner
+from overflow.util.perimeter import Int64Perimeter, get_tile_perimeter
 
 
 @pytest.fixture(name="test_edge_cells")
@@ -13,9 +14,10 @@ def fixture_test_edge_cells():
             [14, -1, -1, -1, -1, 7],
             [13, 12, 11, 10, 9, 8],
         ],
-        dtype=np.int32,
+        dtype=np.int64,
     )
-    return TileEdgeCells(array, 0)
+    perimeter_data = get_tile_perimeter(array)
+    return Int64Perimeter(perimeter_data, 4, 6, 0)
 
 
 @pytest.fixture(name="test_perimeter_indices")
@@ -91,10 +93,3 @@ def test_get_side(test_edge_cells):
         [13, 12, 11, 10, 9, 8],
         [0, 15, 14, 13],
     ]
-
-
-def test_distance(test_edge_cells):
-    """Test the distance method."""
-    expected_distances = [0, 1, 2, 3, 4, 5, 5, 5, 5, 4, 3, 3, 3, 3, 2, 1]
-    distances = [test_edge_cells.distance(0, i) for i in range(test_edge_cells.size())]
-    assert distances == expected_distances

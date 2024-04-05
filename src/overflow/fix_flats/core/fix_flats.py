@@ -9,10 +9,10 @@ from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
 )
-from overflow.util.numba_datastructures import Queue
+from overflow.util.queue import Queue
 
 
-@njit
+@njit(cache=True)
 def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     """Algorithm 3 FlatEdges: This function locates flat cells which border on
     higher and lower terrain and places them into queues for further processing,
@@ -35,7 +35,6 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     Returns:
         tuple[list, list]: A tuple containing the high and low edge cell queues
     """
-    # FIFO queues for the high and low edge cells
     high_edges = List()
     low_edges = List()
 
@@ -67,7 +66,7 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     return high_edges, low_edges
 
 
-@njit
+@njit(cache=True)
 def label_flats(
     dem: np.ndarray, labels: np.ndarray, new_label: int, flat_row: int, flat_col: int
 ) -> None:
@@ -114,7 +113,7 @@ def label_flats(
             to_be_filled.push((neighbor_row, neighbor_col))
 
 
-@njit
+@njit(cache=True)
 def away_from_higher(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, high_edges: list
 ) -> None:
@@ -164,7 +163,7 @@ def away_from_higher(
                 high_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
+@njit(cache=True)
 def towards_lower(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, low_edges: list
 ) -> None:
@@ -222,7 +221,7 @@ def towards_lower(
                 low_edges.push((neighbor_row, neighbor_col))
 
 
-@njit
+@njit(cache=True)
 def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
     """Algorithm 1 ResolveFlats: The main body of the algorithm, as described in §2.1.
     Upon entry:
@@ -259,7 +258,7 @@ def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
     return flat_mask
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def d8_masked_flow_dirs(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray
 ) -> None:
@@ -285,8 +284,8 @@ def d8_masked_flow_dirs(
     Returns:
         None: The function modifies the fdr array in place.
     """
-    # pylint: disable=not-an-iterable
-    for row in prange(fdr.shape[0]):
+    # Disabling pylint warning, see https://github.com/PyCQA/pylint/issues/2910
+    for row in prange(fdr.shape[0]):  # pylint: disable=not-an-iterable
         for col in range(fdr.shape[1]):
             if fdr[row, col] != FLOW_DIRECTION_UNDEFINED:
                 continue
@@ -315,9 +314,9 @@ def d8_masked_flow_dirs(
             fdr[row, col] = nmin
 
 
-@njit
+@njit(cache=True)
 def fix_flats(
-    dem: np.ndarray, flow_dirs: np.ndarray, in_place: bool = True
+    dem: np.ndarray, flow_dirs: np.ndarray, inplace: bool = True
 ) -> np.ndarray | None:
     """Fix flat areas in a digital elevation model by assigning flow directions to flat areas.
     This function uses the algorithm described in the paper https://rbarnes.org/sci/2014_flats.pdf
@@ -327,13 +326,13 @@ def fix_flats(
     Args:
         dem (np.ndarray): The digital elevation model
         flow_dirs (np.ndarray): The flow direction raster with flat areas
-        in_place (bool, optional): Whether to modify the flow_dirs array in place. Defaults to False.
+        inplace (bool, optional): Whether to modify the flow_dirs array in place. Defaults to False.
 
     Returns:
         np.ndarray | None: The flow direction raster with flat areas fixed or None if in_place is True
     """
     flat_mask = resolve_flats(dem, flow_dirs)
-    if in_place:
+    if inplace:
         d8_masked_flow_dirs(dem, flat_mask, flow_dirs)
         return None
     else:

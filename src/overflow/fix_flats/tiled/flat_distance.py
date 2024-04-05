@@ -1,12 +1,28 @@
 from numba import njit, prange
 import numpy as np
-from overflow.util.numba_datastructures import Queue
+from overflow.util.queue import Queue
 from overflow.util.raster import neighbor_generator
-from overflow.fix_flats.tiled.state_manager import Int64Perimeter, get_tile_perimeter
+from overflow.util.perimeter import Int64Perimeter, get_tile_perimeter
 
 
-@njit(parallel=True)
-def compute_min_dist(labels_array):
+@njit(parallel=True, cache=True)
+def compute_min_dist(labels_array: np.ndarray) -> np.ndarray:
+    """
+    Compute the minimum distances between perimeter cells with the same label.
+
+    This function takes a 2D array of labels and computes the minimum distances between perimeter
+    cells that have the same label. It uses a breadth-first search (BFS) algorithm to traverse
+    the cells with the same label and calculate the distances.
+
+    Args:
+        labels_array (np.ndarray): A 2D array of labels, where each cell is assigned a label value.
+            Cells with the same label belong to the same flat region.
+
+    Returns:
+        np.ndarray: A 2D array of shape (perimeter_count, perimeter_count) representing the
+            minimum distances between perimeter cells with the same label. The value at index
+            (i, j) represents the minimum distance between perimeter cell i and perimeter cell j.
+    """
     labels_perimeter = Int64Perimeter(
         get_tile_perimeter(labels_array),
         labels_array.shape[0],
@@ -15,7 +31,8 @@ def compute_min_dist(labels_array):
     )
     perimeter_count = labels_perimeter.size()
     min_dist = np.zeros((perimeter_count, perimeter_count), dtype=np.int64)
-    for i in prange(perimeter_count):
+    # Disabling pylint warning, see https://github.com/PyCQA/pylint/issues/2910
+    for i in prange(perimeter_count):  # pylint: disable=not-an-iterable
         label = labels_perimeter.data[i]
         if label == 0:
             continue
