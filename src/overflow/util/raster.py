@@ -1,4 +1,5 @@
-from typing import Iterator
+from enum import Enum
+from typing import Generator, Any
 from osgeo import gdal
 import numpy as np
 from tqdm import tqdm
@@ -25,6 +26,8 @@ def gdal_data_type_to_numpy_data_type(gdal_dtype: int) -> np.dtype:
         "Int16": np.int16,
         "UInt32": np.uint32,
         "Int32": np.int32,
+        "UInt64": np.uint64,
+        "Int64": np.int64,
         "Float32": np.float32,
         "Float64": np.float64,
         "CInt16": np.complex64,
@@ -175,7 +178,7 @@ def raster_chunker(
     band: gdal.Band,
     chunk_size: int,
     chunk_buffer_size: int,
-) -> Iterator[RasterChunk]:
+) -> Generator[RasterChunk, Any, None]:
     """Generator that yields chunks of a raster.
 
     Args:
@@ -186,18 +189,18 @@ def raster_chunker(
         buffer_col_size (int): The number of columns in the buffer region.
 
     Yields:
-        Iterator[Tuple[int, int, np.ndarray]]: An iterator that yields tuples. Each tuple contains
-        the buffered chunk of the raster band as a numpy array, the x offset of the chunk, the y offset of the chunk,
-        the number of columns in the chunk, and the number of rows in the chunk.
+        Generator[RasterChunk]: A generator that yields a RasterChunk.
     """
     # Calculate the number of chunks in each dimension
     n_chunks_row = (band.YSize + chunk_size - 1) // chunk_size
     n_chunks_col = (band.XSize + chunk_size - 1) // chunk_size
+    # Calculate the total number of chunks
+    total_chunks = n_chunks_row * n_chunks_col
+    # Create a tqdm progress bar
+    progress_bar = tqdm(total=total_chunks, desc="Processing raster chunks")
     # Iterate over the chunks
 
-    for chunk_row in tqdm(
-        range(n_chunks_row), desc=f"Processing {n_chunks_row} raster chunks"
-    ):
+    for chunk_row in range(n_chunks_row):
         for chunk_col in range(n_chunks_col):
             # Read the chunk and yield it
             chunk = RasterChunk(
@@ -208,17 +211,17 @@ def raster_chunker(
             )
             chunk.read(band)
             yield chunk
+            # Update the progress bar
+            progress_bar.update(1)
 
 
-# Define the Numba specification for the GridCell jitclass
-spec = [
-    ("row", int64),
-    ("column", int64),
-    ("cost", float32),
-]
-
-
-@jitclass(spec)
+@jitclass(
+    [
+        ("row", int64),
+        ("column", int64),
+        ("cost", float32),
+    ]
+)
 class GridCell:
     """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
 
@@ -233,6 +236,47 @@ class GridCell:
 
     def __eq__(self, other):
         return self.cost == other.cost
+
+
+class Side(Enum):
+    """
+    An enumeration representing the sides of a 2D array (tile).
+    Used to join tiles together along their edges.
+    """
+
+    TOP = 1
+    RIGHT = 2
+    BOTTOM = 3
+    LEFT = 4
+
+
+class Corner(Enum):
+    """
+    An enumeration representing the corners of a 2D array (tile).
+    Used to join tiles together at their corners.
+    """
+
+    TOP_LEFT = 1
+    TOP_RIGHT = 2
+    BOTTOM_RIGHT = 3
+    BOTTOM_LEFT = 4
+
+
+@njit
+def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
+    """
+    Get the perimeter of a 2D array (tile) as a 1D array.
+    The perimeter is ordered in a clockwise direction starting from the top-left corner.
+    """
+    rows = len(array)
+    cols = len(array[0])
+    perimeter = np.empty(2 * (rows + cols) - 4, dtype=array.dtype)
+    # Fill the perimeter array
+    perimeter[:cols] = array[0]  # top
+    perimeter[cols : cols + rows - 2] = array[1:-1, -1]  # right
+    perimeter[cols + rows - 2 : 2 * cols + rows - 2] = array[-1, ::-1]  # bottom
+    perimeter[2 * cols + rows - 2 :] = array[-2:0:-1, 0]  # left
+    return perimeter
 
 
 @njit
@@ -269,3 +313,134 @@ def neighbor_generator(row, col, n_row, n_col):
         if not_in_bounds:
             continue
         yield neighbor_row, neighbor_col
+
+
+def open_dataset(filepath: str, access: int = gdal.GA_ReadOnly) -> gdal.Dataset:
+    """
+    Opens a raster dataset and returns the dataset and specified band.
+
+    Args:
+        filepath (str): The path to the raster file.
+        band_number (int, optional): The band number to open (default is 1).
+        access (int, optional): The access mode for opening the dataset (default is gdal.GA_ReadOnly).
+
+    Returns:
+        gdal.Dataset: the opened dataset (gdal.Dataset)
+
+    Raises:
+        ValueError: If unable to open the dataset.
+    """
+    dataset = gdal.Open(filepath, access)
+    if dataset is None:
+        raise ValueError(f"Unable to open dataset: {filepath}")
+    return dataset
+
+
+def create_dataset(
+    filepath: str,
+    nodata_value: float | int,
+    data_type: int,
+    x_size: int,
+    y_size: int,
+    geotransform: tuple = None,
+    projection: str = None,
+) -> gdal.Dataset:
+    """
+    Creates a new raster dataset with the specified parameters using LZW compression.
+
+    Args:
+        filepath (str): The path to save the created dataset.
+        nodata_value (float|int): The value to use for representing nodata pixels.
+        data_type (int): The data type of the raster dataset (e.g., gdal.GDT_Float32).
+        x_size (int): The width of the raster dataset in pixels.
+        y_size (int): The height of the raster dataset in pixels.
+        geotransform (tuple, optional): The geotransform parameters for the dataset (default is None).
+        projection (str, optional): The projection information for the dataset (default is None).
+        num_bands (int, optional): The number of bands in the dataset (default is 1).
+
+    Returns:
+        gdal.Dataset: the created dataset
+    """
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(
+        filepath,
+        x_size,
+        y_size,
+        1,
+        data_type,
+        options=["COMPRESS=LZW"],
+    )
+    if geotransform:
+        dataset.SetGeoTransform(geotransform)
+    if projection:
+        dataset.SetProjection(projection)
+    band = dataset.GetRasterBand(1)
+    band.SetNoDataValue(nodata_value)
+    return dataset
+
+
+def read_tile(filepath: str):
+    """
+    Reads a raster tile from the specified file path and returns its data as a numpy array.
+
+    Args:
+        filepath (str): The path to the raster tile file.
+
+    Returns:
+        numpy.ndarray: The raster tile data as a numpy array.
+    """
+    ds = open_dataset(filepath)
+    band = ds.GetRasterBand(1)
+    return band.ReadAsArray()
+
+
+def mosaic_tiles(
+    prefix: str,
+    rows: int,
+    cols: int,
+    output_filepath: str,
+    nodata_value: float | int,
+    data_type: int,
+    x_size: int,
+    y_size: int,
+    geotransform: tuple,
+    projection: str,
+):
+    """
+    Mosaics multiple raster tiles into a single raster dataset.
+
+    Args:
+        prefix (str): The prefix of the tile filepaths. '_{row}_{col}.tif' will be appended to the prefix
+            for every row, col in given number of rows and columns.
+        rows (int): The number of rows in the tile grid.
+        cols (int): The number of columns in the tile grid.
+        output_filepath (str): The path to save the mosaicked raster dataset.
+        nodata_value (float|int): The value to use for representing nodata pixels.
+        data_type (int): The data type of the output raster dataset (e.g., gdal.GDT_Float32).
+        x_size (int): The width of the output raster dataset in pixels.
+        y_size (int): The height of the output raster dataset in pixels.
+        geotransform (tuple): The geotransform parameters for the output dataset.
+        projection (str): The projection information for the output dataset.
+    """
+    out_ds = create_dataset(
+        output_filepath,
+        nodata_value,
+        data_type,
+        x_size,
+        y_size,
+        geotransform,
+        projection,
+    )
+    out_band = out_ds.GetRasterBand(1)
+    for row in range(rows):
+        for col in range(cols):
+            tile_filepath = f"{prefix}_{row}_{col}.tif"
+            tile = read_tile(tile_filepath)
+            chunk_size = tile.shape[0]
+            chunk = RasterChunk(row, col, chunk_size, 0)
+            chunk.from_numpy(tile)
+            chunk.write(out_band)
+    out_band.FlushCache()
+    out_ds.FlushCache()
+    out_ds = None
+    out_band = None

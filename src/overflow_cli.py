@@ -3,6 +3,7 @@ import click
 from overflow.breach_single_cell_pits import breach_single_cell_pits
 from overflow.flow_direction import flow_direction
 from overflow.breach_paths_least_cost import breach_paths_least_cost
+from overflow.fix_flats.tiled import fix_flats_tiled
 from overflow.constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_SEARCH_RADIUS,
@@ -132,6 +133,53 @@ def breach_paths_least_cost_cli(
         print(
             f"breach_paths_least_cost failed with the following exception: {str(exc)}"
         )
+        # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
+        raise click.Abort()
+
+
+@main.command(name="fix-flats")
+@click.option(
+    "--dem_file",
+    help="path to the GDAL supported raster dataset for the DEM",
+)
+@click.option(
+    "--fdr_file",
+    help="path to the GDAL supported raster dataset for the FDR",
+)
+@click.option(
+    "--output_file",
+    help="path to the output file (must be GeoTiff)",
+)
+@click.option(
+    "--chunk_size",
+    help="chunk size",
+    default=DEFAULT_CHUNK_SIZE,
+)
+def fix_flats_cli(dem_file: str, fdr_file: str, output_file: str, chunk_size: int):
+    """
+    This function is used to fix flats in a DEM.
+    The function takes filepath to a GDAL supported raster dataset as
+    input and prodeces an output DEM with fixed flats.
+
+    Parameters
+    ----------
+    dem_file : str
+        Path to the input dem file
+    fdr_file : str
+        Path to the input flow direction file
+    output_file : str
+        Path to the output file
+    chunk_size : int
+        Size of the chunk to be used for processing
+
+    Returns
+    -------
+    None
+    """
+    try:
+        fix_flats_tiled(dem_file, fdr_file, output_file, chunk_size)
+    except Exception as exc:
+        print(f"fix_flats failed with the following exception: {str(exc)}")
         # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
         raise click.Abort()
 
