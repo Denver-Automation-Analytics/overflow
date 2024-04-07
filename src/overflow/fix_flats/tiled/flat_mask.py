@@ -1,3 +1,7 @@
+import concurrent.futures
+import time
+import queue
+import os
 from numba.typed import List  # pylint: disable=no-name-in-module
 from numba import njit
 import numpy as np
@@ -197,6 +201,7 @@ def towards_lower_tile(
                 interior_low_edges.push((neighbor_row, neighbor_col))
 
 
+@njit(nogil=True)
 def create_flat_mask_tile(
     interior_high_edges: Int64PairList,
     interior_low_edges: Int64PairList,
@@ -206,7 +211,7 @@ def create_flat_mask_tile(
     labels: np.ndarray,
     tile_index: int,
     chunk_size: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, int]:
     """
     Create a flat mask for a given tile.
 
@@ -250,7 +255,7 @@ def create_flat_mask_tile(
         fdr,
         flat_mask,
     )
-    return flat_mask
+    return flat_mask, tile_index
 
 
 def create_flat_mask(
@@ -278,29 +283,44 @@ def create_flat_mask(
         None
     """
     tile_index = 0
-    for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):
-        labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 0)
-        labels_tile.read(labels_band)
-        interior_high_edges = global_state.interior_high_edges[tile_index]
-        interior_low_edges = global_state.interior_low_edges[tile_index]
-        dist_to_high_edge = dist_to_high_edge_tiles[tile_index]
-        dist_to_low_edge = dist_to_low_edge_tiles[tile_index]
+    tile_index_map = {}
+    max_workers = os.cpu_count()
+    task_queue = queue.Queue(max_workers)
 
-        # Thread Start
-        flat_mask = create_flat_mask_tile(
-            interior_high_edges,
-            interior_low_edges,
-            dist_to_low_edge,
-            dist_to_high_edge,
-            fdr_tile.data,
-            labels_tile.data,
-            tile_index,
-            chunk_size,
-        )
-        # Thread End
+    with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
+        futures = []
+        for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):
+            while task_queue.full():
+                time.sleep(0.1)
+            task_queue.put(tile_index)
+            labels_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 0)
+            labels_tile.read(labels_band)
+            interior_high_edges = global_state.interior_high_edges[tile_index]
+            interior_low_edges = global_state.interior_low_edges[tile_index]
+            dist_to_high_edge = dist_to_high_edge_tiles[tile_index]
+            dist_to_low_edge = dist_to_low_edge_tiles[tile_index]
 
-        flat_mask_tile = RasterChunk(fdr_tile.row, fdr_tile.col, chunk_size, 0)
-        flat_mask_tile.from_numpy(flat_mask)
-        flat_mask_tile.write(flat_mask_band)
-        tile_index += 1
+            future = executor.submit(
+                create_flat_mask_tile,
+                interior_high_edges,
+                interior_low_edges,
+                dist_to_low_edge,
+                dist_to_high_edge,
+                fdr_tile.data,
+                labels_tile.data,
+                tile_index,
+                chunk_size,
+            )
+            future.add_done_callback(lambda x: task_queue.get())
+            futures.append(future)
+            tile_index_map[tile_index] = (fdr_tile.row, fdr_tile.col)
+            tile_index += 1
+
+        for future in concurrent.futures.as_completed(futures):
+            flat_mask, tile_index = future.result()
+            row, col = tile_index_map[tile_index]
+            flat_mask_tile = RasterChunk(row, col, chunk_size, 0)
+            flat_mask_tile.from_numpy(flat_mask)
+            flat_mask_tile.write(flat_mask_band)
+
     flat_mask_band.FlushCache()
