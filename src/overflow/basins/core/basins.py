@@ -1,5 +1,6 @@
 import numpy as np
-from numba import njit, prange
+from numba import njit, prange, int64
+from numba.typed import Dict
 from overflow.constants import (
     NEIGHBOR_OFFSETS,
     FLOW_DIRECTION_UNDEFINED,
@@ -160,26 +161,37 @@ def label_watersheds(
     """
     watersheds = np.zeros_like(fdr, dtype=np.int64)
     rows, cols = fdr.shape
-    local_graph = {}
-    for row in prange(rows):  # pylint: disable=not-an-iterable
-        for col in range(cols):
-            if is_outlet(fdr, row, col):
-                watershed_id = row * cols + col + 1 + id_offset
-                queue = Queue([(row, col, watershed_id)])
-                watersheds[row, col] = watershed_id
+    # instead of a dictionary, we use a 2D array to store the downstream watersheds
+    # since dictionary appends are not thread-safe
+    downstream_watersheds = np.zeros_like(fdr, dtype=np.int64)
+    num_cells = rows * cols
+    for index in prange(num_cells):  # pylint: disable=not-an-iterable
+        row = index // cols
+        col = index % cols
+        if is_outlet(fdr, row, col):
+            watershed_id = row * cols + col + 1 + id_offset
+            queue = Queue([(row, col, watershed_id)])
+            watersheds[row, col] = watershed_id
 
-                while queue:
-                    r, c, watershed_id = queue.pop()
-                    if (r + row_offset, c + col_offset) in drainage_points:
-                        prev_watershed_id = watershed_id
-                        watershed_id = r * cols + c + 1 + id_offset
-                        # if this is not an outlet, add an edge to the local graph
-                        if prev_watershed_id != watershed_id:
-                            local_graph[watershed_id] = prev_watershed_id
-                        drainage_points[(r + row_offset, c + col_offset)] = watershed_id
-                        watersheds[r, c] = watershed_id
-                    for n_row, n_col in upstream_neighbor_generator(fdr, r, c):
-                        watersheds[n_row, n_col] = watershed_id
-                        queue.push((n_row, n_col, watershed_id))
+            while queue:
+                r, c, watershed_id = queue.pop()
+                if (r + row_offset, c + col_offset) in drainage_points:
+                    prev_watershed_id = watershed_id
+                    watershed_id = r * cols + c + 1 + id_offset
+                    # if this is not an outlet, add an edge to the local graph
+                    if prev_watershed_id != watershed_id:
+                        downstream_watersheds[r, c] = prev_watershed_id
+                    drainage_points[(r + row_offset, c + col_offset)] = watershed_id
+                    watersheds[r, c] = watershed_id
+                for n_row, n_col in upstream_neighbor_generator(fdr, r, c):
+                    watersheds[n_row, n_col] = watershed_id
+                    queue.push((n_row, n_col, watershed_id))
+
+    # Create local graph from downstream_watersheds and drainage_points
+    local_graph = Dict.empty(int64, int64)
+    for (r, c), watershed_id in drainage_points.items():
+        downstream_id = downstream_watersheds[r - row_offset, c - col_offset]
+        if downstream_id != 0:
+            local_graph[watershed_id] = downstream_id
 
     return watersheds, local_graph
