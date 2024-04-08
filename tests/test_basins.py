@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from osgeo import gdal
-from numba.typed import Dict
+from numba.typed import Dict  # pylint: disable=no-name-in-module
 from numba.types import UniTuple
 from numba import int64
 from overflow.basins.core import label_watersheds

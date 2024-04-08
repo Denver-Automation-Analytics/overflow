@@ -1,6 +1,6 @@
 import numpy as np
 from numba import njit, prange, int64
-from numba.typed import Dict
+from numba.typed import Dict  # pylint: disable=no-name-in-module
 from overflow.constants import (
     NEIGHBOR_OFFSETS,
     FLOW_DIRECTION_UNDEFINED,

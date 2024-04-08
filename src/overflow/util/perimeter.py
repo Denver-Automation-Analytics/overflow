@@ -153,4 +153,5 @@ Float32Perimeter = create_perimeter_class(float32)
 Int64Perimeter = create_perimeter_class(int64)
 UInt8Perimeter = create_perimeter_class(uint8)
 
+# pylint: disable=no-member
 Float32PerimeterList = ListType(Float32Perimeter.class_type.instance_type)

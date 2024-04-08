@@ -1,6 +1,5 @@
-from numba import int64, int32, float32
-from numba.typed import List, Dict
-from numba.types import UniTuple, Tuple, Array, ListType, DictType
+from numba import int64
+from numba.types import UniTuple, ListType
 
 
 Int64Pair = UniTuple(int64, 2)
