@@ -4,7 +4,8 @@ from osgeo import gdal
 from numba.typed import Dict
 from numba.types import UniTuple
 from numba import int64
-from overflow.basins import label_watersheds, label_watersheds_tiled
+from overflow.basins.core import label_watersheds
+from overflow.basins.tiled import label_watersheds_tiled
 from overflow.constants import FLOW_DIRECTION_NODATA
 
 
@@ -28,10 +29,10 @@ def fixture_expected_watersheds():
     """The expected watersheds from the test fdr."""
     watersheds = np.array(
         [
-            [1, 1, 2, 2],
-            [1, 1, 2, 2],
-            [3, 3, 4, 4],
-            [3, 3, 4, 4],
+            [1, 1, 4, 4],
+            [1, 1, 4, 4],
+            [13, 13, 16, 16],
+            [13, 13, 16, 16],
         ],
         dtype=np.int64,
     )
@@ -85,11 +86,11 @@ def fixture_expected_watersheds_with_drainage_points():
     """The expected watersheds from the test_fdr_with_drainage_points."""
     watersheds = np.array(
         [
-            [1, 1, 1, 1, 1],
-            [2, 1, 1, 1, 2],
-            [3, 2, 1, 2, 3],
-            [3, 3, 2, 3, 3],
-            [3, 3, 3, 3, 3],
+            [13, 13, 13, 13, 13],
+            [18, 13, 13, 13, 18],
+            [23, 18, 13, 18, 23],
+            [23, 23, 18, 23, 23],
+            [23, 23, 23, 23, 23],
         ],
         dtype=np.int64,
     )
@@ -99,9 +100,9 @@ def fixture_expected_watersheds_with_drainage_points():
 def test_label_watersheds(test_fdr, expected_watersheds):
     """Test the label_watersheds function."""
     drainage_points = Dict.empty(UniTuple(int64, 2), int64)
-    watersheds, next_id = label_watersheds(test_fdr, drainage_points)
+    watersheds, local_graph = label_watersheds(test_fdr, drainage_points)
     assert np.array_equal(watersheds, expected_watersheds)
-    assert next_id == 5
+    assert len(local_graph) == 0
 
 
 def test_label_watersheds_with_drainage_points(
@@ -110,13 +111,14 @@ def test_label_watersheds_with_drainage_points(
     expected_watersheds_with_drainage_points,
 ):
     """Test the label_watersheds function with drainage points."""
-    watersheds, next_id = label_watersheds(
+    watersheds, local_graph = label_watersheds(
         test_fdr_with_drainage_points, test_drainage_points
     )
     assert np.array_equal(watersheds, expected_watersheds_with_drainage_points)
-    assert next_id == 4
-    assert test_drainage_points[(2, 2)] == 1
-    assert test_drainage_points[(3, 2)] == 2
+    assert local_graph[18] == 23
+    assert local_graph[13] == 18
+    assert test_drainage_points[(2, 2)] == 13
+    assert test_drainage_points[(3, 2)] == 18
 
 
 def test_label_watersheds_tiled(
@@ -126,13 +128,25 @@ def test_label_watersheds_tiled(
 ):
     """Test the label_watersheds_tiled function."""
     output_path = "/vsimem/watersheds.tif"
-    label_watersheds_tiled(
+    graph = label_watersheds_tiled(
         test_fdr_with_drainage_points_filepath,
         test_drainage_points,
         output_path,
-        chunk_size=3,
+        chunk_size=3,  # chunk size that does not evenly divide the raster
     )
     dataset = gdal.Open(output_path)
     band = dataset.GetRasterBand(1)
     watersheds = band.ReadAsArray()
+    # Remap the watershed ids to match the expected watersheds
+    watershed_id_map = {
+        9: 13,
+        21: 18,
+        24: 23,
+    }
+    for old_id, new_id in watershed_id_map.items():
+        watersheds = np.where(watersheds == old_id, new_id, watersheds)
     assert np.array_equal(watersheds, expected_watersheds_with_drainage_points)
+    assert graph[21] == 24
+    assert graph[9] == 21
+    assert test_drainage_points[(2, 2)] == 9
+    assert test_drainage_points[(3, 2)] == 21

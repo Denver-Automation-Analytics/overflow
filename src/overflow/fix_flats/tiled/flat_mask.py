@@ -287,6 +287,14 @@ def create_flat_mask(
     max_workers = os.cpu_count()
     task_queue = queue.Queue(max_workers)
 
+    def handle_result(future):
+        flat_mask, tile_index = future.result()
+        row, col = tile_index_map[tile_index]
+        flat_mask_tile = RasterChunk(row, col, chunk_size, 0)
+        flat_mask_tile.from_numpy(flat_mask)
+        flat_mask_tile.write(flat_mask_band)
+        task_queue.get()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
         futures = []
         for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):
@@ -311,16 +319,9 @@ def create_flat_mask(
                 tile_index,
                 chunk_size,
             )
-            future.add_done_callback(lambda x: task_queue.get())
-            futures.append(future)
             tile_index_map[tile_index] = (fdr_tile.row, fdr_tile.col)
+            future.add_done_callback(handle_result)
+            futures.append(future)
             tile_index += 1
-
-        for future in concurrent.futures.as_completed(futures):
-            flat_mask, tile_index = future.result()
-            row, col = tile_index_map[tile_index]
-            flat_mask_tile = RasterChunk(row, col, chunk_size, 0)
-            flat_mask_tile.from_numpy(flat_mask)
-            flat_mask_tile.write(flat_mask_band)
 
     flat_mask_band.FlushCache()

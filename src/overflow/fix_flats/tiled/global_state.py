@@ -170,6 +170,17 @@ def create_global_state(
     max_workers = os.cpu_count()
     task_queue = queue.Queue(max_workers)
 
+    def handle_result(future):
+        local_graph, high_edges, low_edges, labels = future.result()
+        global_state.graph.add(local_graph)
+        global_state.interior_low_edges[local_graph.tile_index] = low_edges
+        global_state.interior_high_edges[local_graph.tile_index] = high_edges
+        row, col = tile_index_map[local_graph.tile_index]
+        labels_tile = RasterChunk(row, col, chunk_size, 0)
+        labels_tile.from_numpy(labels)
+        labels_tile.write(labels_band)
+        task_queue.get()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for dem_tile in raster_chunker(dem_band, chunk_size, 1):
@@ -187,21 +198,11 @@ def create_global_state(
             future = executor.submit(
                 create_local_graph, dem_tile.data, fdr_tile.data, tile_index
             )
-            future.add_done_callback(lambda x: task_queue.get())
+            tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
+            future.add_done_callback(handle_result)
             futures.append(future)
 
-            tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
             tile_index += 1
-
-        for future in concurrent.futures.as_completed(futures):
-            local_graph, high_edges, low_edges, labels = future.result()
-            global_state.graph.add(local_graph)
-            global_state.interior_low_edges[local_graph.tile_index] = low_edges
-            global_state.interior_high_edges[local_graph.tile_index] = high_edges
-            row, col = tile_index_map[local_graph.tile_index]
-            labels_tile = RasterChunk(row, col, chunk_size, 0)
-            labels_tile.from_numpy(labels)
-            labels_tile.write(labels_band)
 
     global_state.complete_graph()
     labels_band.FlushCache()
