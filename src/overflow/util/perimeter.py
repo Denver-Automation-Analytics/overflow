@@ -1,7 +1,7 @@
 from numba.experimental import jitclass
 from numba import njit, float32, int64
 from numba.types import ListType
-from numba import int64
+from numba import int64, uint8
 import numpy as np
 from overflow.util.raster import Corner, Side
 
@@ -151,5 +151,7 @@ def create_perimeter_class(numba_type):
 
 Float32Perimeter = create_perimeter_class(float32)
 Int64Perimeter = create_perimeter_class(int64)
+UInt8Perimeter = create_perimeter_class(uint8)
 
+# pylint: disable=no-member
 Float32PerimeterList = ListType(Float32Perimeter.class_type.instance_type)

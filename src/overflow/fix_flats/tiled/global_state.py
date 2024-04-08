@@ -1,7 +1,12 @@
 import math
+import os
+import concurrent.futures
+import time
+import queue
 import numpy as np
 from osgeo import gdal
 from numba.experimental import jitclass
+from numba import njit
 from numba.typed import List  # pylint: disable=no-name-in-module
 from overflow.fix_flats.tiled.graphs import GlobalGraph
 from overflow.numba_types import Int64PairListList, Int64Pair
@@ -80,6 +85,7 @@ class GlobalState:
                 )
 
 
+@njit(nogil=True)
 def create_local_graph(
     dem: np.ndarray, fdr: np.ndarray, tile_index: int
 ) -> tuple[LocalGraph, list, list, np.ndarray]:
@@ -159,29 +165,45 @@ def create_global_state(
     perimeter_cells_per_tile = 4 * (chunk_size - 2) + 4
     global_state = GlobalState(tile_rows, tile_cols, perimeter_cells_per_tile)
     tile_index = 0
+    tile_index_map = {}
 
-    for dem_tile in raster_chunker(dem_band, chunk_size, 1):
-        fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
-        fdr_tile.read(fdr_band)
-        dem_unbuffered = dem_tile.data[1:-1, 1:-1]
-        perimeter_elevations = get_tile_perimeter(dem_unbuffered)
-        global_state.elevations[tile_index] = Float32Perimeter(
-            perimeter_elevations, chunk_size, chunk_size, tile_index
-        )
+    max_workers = os.cpu_count()
+    task_queue = queue.Queue(max_workers)
 
-        ## Thread Start
-        local_graph, high_edges, low_edges, labels = create_local_graph(
-            dem_tile.data, fdr_tile.data, tile_index
-        )
-        ## Thread End
-
+    def handle_result(future):
+        local_graph, high_edges, low_edges, labels = future.result()
         global_state.graph.add(local_graph)
-        global_state.interior_low_edges[tile_index] = low_edges
-        global_state.interior_high_edges[tile_index] = high_edges
-        tile_index += 1
-        labels_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 0)
+        global_state.interior_low_edges[local_graph.tile_index] = low_edges
+        global_state.interior_high_edges[local_graph.tile_index] = high_edges
+        row, col = tile_index_map[local_graph.tile_index]
+        labels_tile = RasterChunk(row, col, chunk_size, 0)
         labels_tile.from_numpy(labels)
         labels_tile.write(labels_band)
+        task_queue.get()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for dem_tile in raster_chunker(dem_band, chunk_size, 1):
+            while task_queue.full():
+                time.sleep(0.1)
+            task_queue.put(tile_index)
+            fdr_tile = RasterChunk(dem_tile.row, dem_tile.col, chunk_size, 1)
+            fdr_tile.read(fdr_band)
+            dem_unbuffered = dem_tile.data[1:-1, 1:-1]
+            perimeter_elevations = get_tile_perimeter(dem_unbuffered)
+            global_state.elevations[tile_index] = Float32Perimeter(
+                perimeter_elevations, chunk_size, chunk_size, tile_index
+            )
+
+            future = executor.submit(
+                create_local_graph, dem_tile.data, fdr_tile.data, tile_index
+            )
+            tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
+            future.add_done_callback(handle_result)
+            futures.append(future)
+
+            tile_index += 1
+
     global_state.complete_graph()
     labels_band.FlushCache()
     return global_state

@@ -49,11 +49,14 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
             fdr_current = fdr[row, col]
             if (
                 fdr_current != FLOW_DIRECTION_UNDEFINED
-                and fdr_neighbor == FLOW_DIRECTION_UNDEFINED
+                and (
+                    fdr_neighbor == FLOW_DIRECTION_UNDEFINED
+                    or fdr_neighbor == FLOW_DIRECTION_NODATA
+                )
                 and dem[row, col] == dem[neighbor_row, neighbor_col]
             ):
                 # cell is a low edge cell since it has a defined flow direction and a neighbor does not
-                # because the neighbor is a flat cell
+                # because the neighbor is a flat cell or nodata cell
                 low_edges.append((row, col))
                 break
             if (
@@ -300,7 +303,15 @@ def d8_masked_flow_dirs(
                     or neighbor_col < 0
                     or neighbor_col >= fdr.shape[1]
                 ):
-                    continue
+                    # drain to nodata
+                    nmin = i
+                    min_slope = -np.inf
+                    break
+                # if the neighbor is nodata, drain to nodata
+                if fdr[neighbor_row, neighbor_col] == FLOW_DIRECTION_NODATA:
+                    nmin = i
+                    min_slope = -np.inf
+                    break
                 # if the fdr is not part of the same flat, skip
                 if dem[neighbor_row, neighbor_col] != dem[row, col]:
                     continue
