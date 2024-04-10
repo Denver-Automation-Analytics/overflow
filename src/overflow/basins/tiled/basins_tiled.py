@@ -1,9 +1,9 @@
 import math
-import os
 import concurrent.futures
 import time
 import queue
 import numpy as np
+import numba
 from osgeo import gdal
 from numba import njit
 from overflow.util.raster import (
@@ -126,7 +126,7 @@ def label_watersheds_tiled(
     global_state = GlobalState(tile_rows, tile_cols, chunk_size)
     tile_index = 0
 
-    max_workers = os.cpu_count()
+    max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
 
     def handle_result(future):

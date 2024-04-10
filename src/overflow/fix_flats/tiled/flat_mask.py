@@ -1,7 +1,7 @@
 import concurrent.futures
 import time
 import queue
-import os
+import numba
 from numba.typed import List  # pylint: disable=no-name-in-module
 from numba import njit
 import numpy as np
@@ -284,7 +284,7 @@ def create_flat_mask(
     """
     tile_index = 0
     tile_index_map = {}
-    max_workers = os.cpu_count()
+    max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
 
     def handle_result(future):

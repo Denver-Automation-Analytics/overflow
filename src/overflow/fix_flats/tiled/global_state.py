@@ -1,11 +1,11 @@
 import math
-import os
 import concurrent.futures
 import time
 import queue
 import numpy as np
 from osgeo import gdal
 from numba.experimental import jitclass
+import numba
 from numba import njit
 from numba.typed import List  # pylint: disable=no-name-in-module
 from overflow.fix_flats.tiled.graphs import GlobalGraph
@@ -167,7 +167,7 @@ def create_global_state(
     tile_index = 0
     tile_index_map = {}
 
-    max_workers = os.cpu_count()
+    max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
 
     def handle_result(future):
