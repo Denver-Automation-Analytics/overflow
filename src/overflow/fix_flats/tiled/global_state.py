@@ -182,7 +182,6 @@ def create_global_state(
         task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
         for dem_tile in raster_chunker(dem_band, chunk_size, 1):
             while task_queue.full():
                 time.sleep(0.1)
@@ -200,7 +199,6 @@ def create_global_state(
             )
             tile_index_map[tile_index] = (dem_tile.row, dem_tile.col)
             future.add_done_callback(handle_result)
-            futures.append(future)
 
             tile_index += 1
 

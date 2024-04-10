@@ -296,7 +296,6 @@ def create_flat_mask(
         task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
-        futures = []
         for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):
             while task_queue.full():
                 time.sleep(0.1)
@@ -321,7 +320,6 @@ def create_flat_mask(
             )
             tile_index_map[tile_index] = (fdr_tile.row, fdr_tile.col)
             future.add_done_callback(handle_result)
-            futures.append(future)
             tile_index += 1
 
     flat_mask_band.FlushCache()

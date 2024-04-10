@@ -143,7 +143,6 @@ def label_watersheds_tiled(
         task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
         for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):
             while task_queue.full():
                 time.sleep(0.1)
@@ -165,7 +164,6 @@ def label_watersheds_tiled(
                 tile_index,
             )
             future.add_done_callback(handle_result)
-            futures.append(future)
             tile_index += 1
 
     labels_band.FlushCache()
