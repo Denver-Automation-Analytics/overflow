@@ -40,50 +40,8 @@ class LocalGraph:
     ):
         self.tile_index = tile_index
         cell_count = labels_perimeter.size
-        self.flat_edges = List.empty_list(Int64PairList)
-        for _ in range(cell_count):
-            self.flat_edges.append(List.empty_list(Int64Pair))
+        self.flat_edges = self._to_shortest_adjacency_list(min_dists)
         index_offset = self.tile_index * cell_count
-
-        for i, label in enumerate(labels_perimeter):
-            if label == 0:
-                # this cell is not part of a flat
-                continue
-            # walk around the perimeter and connect neighboring cells in the same group
-            # a neighboring cell is defined as the next or previous cell with the same label
-            # as seen by continuing clockwise around the perimeter, not necessarily the
-            # cell directly adjacent in the grid
-            for j in range(i + 1, cell_count + 1):
-                k = j % cell_count
-                if k != i and labels_perimeter[k] == label:
-                    dist = min_dists[i][k]
-                    self.flat_edges[i].append((k + index_offset, dist))
-                    self.flat_edges[k].append((i + index_offset, dist))
-                    break
-            # connect non-neighboring cells to each other if they are part of the same group
-            # we can skip any edges where there exist other paths that have the shortest
-            # distances. For example, if the difference in the distances of vertex i to two
-            # vertices (j and k) equals the distance of the
-            # two end vertices to each other, only the closest vertex should be connected
-            # since the path containing the vertices in between is among the shortest
-            # paths between the two end vertices.
-            # Theoretically, a fully connected graph would produce identical results.
-            # However, this method is used to reduce the number of unnecessary edges in the graph.
-            for j in range(i + 2, cell_count):
-                if labels_perimeter[j] != label:
-                    # this cell is not part of the same flat
-                    continue
-                dist_ij = min_dists[i][j]
-                for k in range(i + 1, j):
-                    if labels_perimeter[k] != label:
-                        continue
-                    dist_ik = min_dists[i][k]
-                    dist_kj = min_dists[k][j]
-                    if dist_ij == dist_ik + dist_kj:
-                        break
-                else:
-                    self.flat_edges[i].append((j + index_offset, dist_ij))
-                    self.flat_edges[j].append((i + index_offset, dist_ij))
 
         # connect each cell to the high/low terrain node
         self.high_edges = List.empty_list(Int64Pair)
@@ -97,6 +55,54 @@ class LocalGraph:
             if distance == 0:
                 continue
             self.low_edges.append((i + index_offset, distance))
+
+    def _to_shortest_adjacency_list(self, dist: np.ndarray) -> List:
+        """
+        Constructs an optimized adjacency list representation of the graph connecting all
+        flat cells along the perimeter of the tile. The adjacency list is constructed using
+        the min_dists array, which is an adjacency matrix containing the shortest distance
+        from any perimeter cell to any other perimeter cell.
+
+        The optimization process involves removing redundant edges that do not contribute to
+        the shortest paths between nodes. For each pair of cells (i, j), the method checks
+        if there exists a shorter path through another cell k. If such a path exists, the
+        direct edge between i and j is considered redundant and is not added to the adjacency
+        list. This optimization ensures that the adjacency list contains the least amount of
+        edges necessary to represent the shortest paths between cells, reducing the complexity
+        of the graph.
+
+        Args:
+            dist (np.ndarray): The min_dists array containing the shortest distances
+                between perimeter cells.
+
+        Returns:
+            List: The optimized adjacency list representation of the graph, where each element
+                is a list of tuples (j, distance) representing an edge from cell i to cell j
+                with the given distance.
+        """
+        cell_count = dist.shape[0]
+        adjacency_list = List.empty_list(Int64PairList)
+        for _ in range(cell_count):
+            adjacency_list.append(List.empty_list(Int64Pair))
+
+        for i in range(cell_count):
+            for j in range(i + 1, cell_count):
+                if dist[i][j] != 0:
+                    is_direct_edge = True
+                    for k in range(cell_count):
+                        if k != i and k != j and dist[i][k] + dist[k][j] == dist[i][j]:
+                            is_direct_edge = False
+                            break
+                    if is_direct_edge:
+                        # add two edges since we don't know from which direction we will traverse
+                        adjacency_list[i].append(
+                            (j + self.tile_index * cell_count, dist[i][j])
+                        )
+                        adjacency_list[j].append(
+                            (i + self.tile_index * cell_count, dist[i][j])
+                        )
+
+        return adjacency_list
 
 
 @jitclass
