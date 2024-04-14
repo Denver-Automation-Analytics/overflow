@@ -1,6 +1,7 @@
 import math
 import concurrent.futures
 import time
+from threading import Lock
 import queue
 import numpy as np
 from osgeo import gdal
@@ -169,17 +170,19 @@ def create_global_state(
 
     max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
+    lock = Lock()
 
     def handle_result(future):
-        local_graph, high_edges, low_edges, labels = future.result()
-        global_state.graph.add(local_graph)
-        global_state.interior_low_edges[local_graph.tile_index] = low_edges
-        global_state.interior_high_edges[local_graph.tile_index] = high_edges
-        row, col = tile_index_map[local_graph.tile_index]
-        labels_tile = RasterChunk(row, col, chunk_size, 0)
-        labels_tile.from_numpy(labels)
-        labels_tile.write(labels_band)
-        task_queue.get()
+        with lock:
+            local_graph, high_edges, low_edges, labels = future.result()
+            global_state.graph.add(local_graph)
+            global_state.interior_low_edges[local_graph.tile_index] = low_edges
+            global_state.interior_high_edges[local_graph.tile_index] = high_edges
+            row, col = tile_index_map[local_graph.tile_index]
+            labels_tile = RasterChunk(row, col, chunk_size, 0)
+            labels_tile.from_numpy(labels)
+            labels_tile.write(labels_band)
+            task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for dem_tile in raster_chunker(dem_band, chunk_size, 1):

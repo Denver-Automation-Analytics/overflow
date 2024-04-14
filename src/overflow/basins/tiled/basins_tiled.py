@@ -1,6 +1,7 @@
 import math
 import concurrent.futures
 import time
+from threading import Lock
 import queue
 import numpy as np
 import numba
@@ -129,18 +130,21 @@ def label_watersheds_tiled(
     max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
 
+    lock = Lock()
+
     def handle_result(future):
-        watersheds, local_graph, fdr_perimeter, tile_row, tile_col, tile_index = (
-            future.result()
-        )
-        labels_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
-        labels_tile.from_numpy(watersheds)
-        labels_tile.write(labels_band)
-        watersheds_perimeter = get_tile_perimeter(watersheds)
-        global_state.flow_directions[tile_index] = fdr_perimeter
-        global_state.watersheds[tile_index] = watersheds_perimeter
-        global_state.graph.update(local_graph)
-        task_queue.get()
+        with lock:
+            watersheds, local_graph, fdr_perimeter, tile_row, tile_col, tile_index = (
+                future.result()
+            )
+            labels_tile = RasterChunk(tile_row, tile_col, chunk_size, 0)
+            labels_tile.from_numpy(watersheds)
+            labels_tile.write(labels_band)
+            watersheds_perimeter = get_tile_perimeter(watersheds)
+            global_state.flow_directions[tile_index] = fdr_perimeter
+            global_state.watersheds[tile_index] = watersheds_perimeter
+            global_state.graph.update(local_graph)
+            task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):

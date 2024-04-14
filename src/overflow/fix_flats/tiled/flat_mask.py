@@ -1,5 +1,6 @@
 import concurrent.futures
 import time
+from threading import Lock
 import queue
 import numba
 from numba.typed import List  # pylint: disable=no-name-in-module
@@ -286,14 +287,16 @@ def create_flat_mask(
     tile_index_map = {}
     max_workers = numba.config.NUMBA_NUM_THREADS
     task_queue = queue.Queue(max_workers)
+    lock = Lock()
 
     def handle_result(future):
-        flat_mask, tile_index = future.result()
-        row, col = tile_index_map[tile_index]
-        flat_mask_tile = RasterChunk(row, col, chunk_size, 0)
-        flat_mask_tile.from_numpy(flat_mask)
-        flat_mask_tile.write(flat_mask_band)
-        task_queue.get()
+        with lock:
+            flat_mask, tile_index = future.result()
+            row, col = tile_index_map[tile_index]
+            flat_mask_tile = RasterChunk(row, col, chunk_size, 0)
+            flat_mask_tile.from_numpy(flat_mask)
+            flat_mask_tile.write(flat_mask_band)
+            task_queue.get()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
         for fdr_tile in raster_chunker(fdr_band, chunk_size, 0):

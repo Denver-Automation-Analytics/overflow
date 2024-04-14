@@ -361,22 +361,25 @@ def create_dataset(
     Returns:
         gdal.Dataset: the created dataset
     """
-    driver = gdal.GetDriverByName("GTiff")
-    dataset = driver.Create(
-        filepath,
-        x_size,
-        y_size,
-        1,
-        data_type,
-        options=["COMPRESS=LZW"],
-    )
-    if geotransform:
-        dataset.SetGeoTransform(geotransform)
-    if projection:
-        dataset.SetProjection(projection)
-    band = dataset.GetRasterBand(1)
-    band.SetNoDataValue(nodata_value)
-    return dataset
+    try:
+        driver = gdal.GetDriverByName("GTiff")
+        dataset = driver.Create(
+            filepath,
+            x_size,
+            y_size,
+            1,
+            data_type,
+            options=["COMPRESS=LZW"],
+        )
+        if geotransform:
+            dataset.SetGeoTransform(geotransform)
+        if projection:
+            dataset.SetProjection(projection)
+        band = dataset.GetRasterBand(1)
+        band.SetNoDataValue(nodata_value)
+        return dataset
+    except Exception as e:
+        raise ValueError(f"Error creating dataset '{filepath}'") from e
 
 
 def read_tile(filepath: str):

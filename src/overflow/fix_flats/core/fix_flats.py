@@ -1,8 +1,9 @@
 import math
 import numpy as np
+from osgeo import gdal
 from numba import njit, prange
 from numba.typed import List  # pylint: disable=no-name-in-module
-from overflow.util.raster import neighbor_generator
+from overflow.util.raster import neighbor_generator, open_dataset, create_dataset
 from overflow.constants import (
     NEIGHBOR_OFFSETS,
     FLOW_DIRECTION_NODATA,
@@ -350,3 +351,28 @@ def fix_flats(
         flow_dirs_copy = flow_dirs.copy()
         d8_masked_flow_dirs(dem, flat_mask, flow_dirs_copy)
         return flow_dirs_copy
+
+
+def fix_flats_from_file(
+    dem_filepath: str, flow_dirs_filepath: str, output_filepath: str
+) -> None:
+    """Runs fix_flats on a DEM and flow direction raster on disk and writes the output to a new file."""
+    dem_ds = open_dataset(dem_filepath)
+    fdr_ds = open_dataset(flow_dirs_filepath)
+    dem_band = dem_ds.GetRasterBand(1)
+    fdr_band = fdr_ds.GetRasterBand(1)
+    dem = dem_band.ReadAsArray()
+    flow_dirs = fdr_band.ReadAsArray()
+    fix_flats(dem, flow_dirs)
+    fixed_flats_ds = create_dataset(
+        output_filepath,
+        fdr_band.GetNoDataValue(),
+        gdal.GDT_Byte,
+        fdr_band.XSize,
+        fdr_band.YSize,
+        fdr_ds.GetGeoTransform(),
+        fdr_ds.GetProjection(),
+    )
+    fixed_flats_band = fixed_flats_ds.GetRasterBand(1)
+    fixed_flats_band.WriteArray(flow_dirs)
+    fixed_flats_band.FlushCache()
