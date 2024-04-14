@@ -1,37 +1,16 @@
 from heapq import heappush, heappop
 import numpy as np
 from numba import njit
-from numba.experimental import jitclass
 from osgeo import gdal
-from overflow.util.raster import open_dataset, create_dataset
-
-gdal.UseExceptions()
-
-DEFAULT_CHUNK_SIZE = 2000
-
-# Define global constant for edge label
-EDGE_LABEL = np.int32(1)
-
-# Define neighbor offsets considering all 8 neighbors
-NEIGHBOR_OFFSETS = np.array(
-    [
-        (-1, -1),
-        (-1, 0),
-        (-1, 1),
-        (0, -1),
-        (0, 1),
-        (1, -1),
-        (1, 0),
-        (1, 1),
-    ],
-    dtype=np.int64,
+from overflow.util.raster import open_dataset, create_dataset, GridCell
+from overflow.constants import (
+    EDGE_LABEL,
+    NEIGHBOR_OFFSETS,
+    TOP,
+    RIGHT,
+    BOTTOM,
+    LEFT,
 )
-
-# Define flags for each side
-TOP = 0b0001  # Binary representation of 1
-RIGHT = 0b0010  # Binary representation of 2
-BOTTOM = 0b0100  # Binary representation of 4
-LEFT = 0b1000  # Binary representation of 8
 
 
 def make_sides(top=False, right=False, bottom=False, left=False):
@@ -49,42 +28,10 @@ def make_sides(top=False, right=False, bottom=False, left=False):
     return s
 
 
-@jitclass
-class GridCell:
-    row: int
-    col: int
-    value: float
-
-    # Constructor
-    def __init__(self, row, col, value):
-        self.row = row
-        self.col = col
-        self.value = value
-
-    # add comparisons for values
-    def __lt__(self, other):
-        return self.value < other.value
-
-    def __le__(self, other):
-        return self.value <= other.value
-
-    def __eq__(self, other):
-        return self.value == other.value
-
-    def __ne__(self, other):
-        return self.value != other.value
-
-    def __gt__(self, other):
-        return self.value > other.value
-
-    def __ge__(self, other):
-        return self.value >= other.value
-
-
 @njit
 def priority_flood_tile(
-    dem: np.ndarray, sides: int, no_data: float = -9999
-) -> tuple[np.ndarray, dict[tuple, float]]:
+    dem: np.ndarray, sides: int = 0, no_data: float = -9999, label_offset: int = 0
+) -> tuple[np.ndarray, dict[tuple, float], int]:
     """
     Implementation of the Priority-Flood algorithm for a single tile.
     This is algorithm 1 from Parallel Priority-Flood (R. Barnes)
@@ -100,12 +47,13 @@ def priority_flood_tile(
         tuple: A tuple containing:
             - labels (numpy.ndarray): Label for each cell in the DEM.
             - graph (dict): Dictionary associating label pairs with minimum spillover elevation.
+            - label_count (int): Number of unique labels in the DEM.
     """
     # Initialize variables
     rows, cols = dem.shape
     labels = np.zeros_like(dem, dtype=np.int32)
     graph = {}
-    label_count = 2
+    label_count = 2 + label_offset
 
     # let numba infer type by initalizing with dummy value
     # and immediately popping it
@@ -135,9 +83,9 @@ def priority_flood_tile(
             c, i, j = pit_queue.pop(0)
         else:
             cell = heappop(open_heap)
-            c = cell.value
+            c = cell.cost
             i = cell.row
-            j = cell.col
+            j = cell.column
 
         # process the current cell
         if labels[i, j] == 0:
@@ -207,99 +155,21 @@ def priority_flood_tile(
             if label_pair not in graph or dem_c < graph[label_pair]:
                 graph[label_pair] = dem_c
 
-    return labels, graph
-
-
-@njit
-def handle_edge(
-    dem_a: np.ndarray,
-    labels_a: np.ndarray,
-    dem_b: np.ndarray,
-    labels_b: np.ndarray,
-    graph: dict[tuple[int, int], float],
-    no_data: float = -9999,
-) -> None:
-    """
-    Combine two tiles by joining their edges.
-    Algorithm 2 from Parallel Priority-Flood (R. Barnes)
-    https://arxiv.org/pdf/1606.06204.pdf
-
-    Args:
-        dem_a (np.ndarray): Vector of cell elevations from tile A adjacent to tile B.
-        labels_a (np.ndarray): Vector of cell labels from tile A adjacent to tile B.
-        dem_b (np.ndarray): Vector of cell elevations from tile B adjacent to tile A.
-        labels_b (np.ndarray): Vector of cell labels from tile B adjacent to tile A.
-        graph (dict[tuple[int, int], float]): Master graph containing the
-            partially-joined graphs of all tiles.
-
-    Returns:
-        None. The function modifies the graph in place.
-    """
-    # Iterate over all indices in the length of DEM_A
-    for i, elev_a in enumerate(dem_a):
-        elev_a = elev_a if elev_a != no_data else -np.inf
-        # Iterate over all neighboring indices
-        for ni in [i - 1, i, i + 1]:
-            elev_b = dem_b[ni] if 0 <= ni < dem_b.shape[0] else -np.inf
-            # Skip if the neighboring index is out of bounds
-            if ni < 0 or ni == dem_a.shape[0]:
-                continue
-            # Skip if the labels at the current index and the neighboring index are the same
-            if labels_a[i] == labels_b[ni]:
-                continue
-            # Calculate the maximum elevation between the current cell and the neighboring cell
-            e = max(elev_a, elev_b)
-            label_pair = tuple(
-                (min(labels_a[i], labels_b[ni]), max(labels_a[i], labels_b[ni]))
-            )
-            # update the graph
-            if label_pair not in graph or e < graph[label_pair]:
-                graph[label_pair] = e
-
-
-@njit
-def handle_corner(
-    elev_a: float,
-    label_a: int,
-    elev_b: float,
-    label_b: int,
-    graph: dict[tuple[int, int], float],
-    no_data: float = -9999,
-) -> None:
-    """
-    Combine two tiles by joining their corners.
-    Algorithm 2 analog from Parallel Priority-Flood (R. Barnes)
-    https://arxiv.org/pdf/1606.06204.pdf
-
-    Args:
-        elev_a (float): Elevation from tile A corner adjacent to tile B corner.
-        label_a (int): Label from tile A corner adjacent to tile B corner.
-        elev_b (float): Elevation from tile B corner adjacent to tile A corner.
-        label_b (int): Label from tile B corner adjacent to tile A corner.
-        graph (dict[tuple[int, int], float]): Master graph containing the
-            partially-joined graphs of all tiles.
-
-    Returns:
-        None. The function modifies the graph in place.
-    """
-    # Handle no_data values
-    elev_a = elev_a if elev_a != no_data else -np.inf
-    elev_b = elev_b if elev_b != no_data else -np.inf
-
-    # Skip if the labels at the corner of tile A and tile B are the same
-    if label_a == label_b:
-        return
-
-    # Calculate the maximum elevation between the corner cell of tile A and tile B
-    e = max(elev_a, elev_b)
-    label_pair = tuple((min(label_a, label_b), max(label_a, label_b)))
-
-    # Update the graph
-    if label_pair not in graph or e < graph[label_pair]:
-        graph[label_pair] = e
+    return labels, graph, label_count
 
 
 def fill_depressions(dem_file: str, out_file: str) -> None:
+    """
+    Fill depressions in a DEM using the Priority-Flood algorithm.
+    This is an all in RAM implementation.
+
+    Args:
+        dem_file (str): Path to the input DEM file.
+        out_file (str): Path to the output filled DEM file.
+
+    Returns:
+        None
+    """
     dem_ds = open_dataset(dem_file)
     dem_band = dem_ds.GetRasterBand(1)
     dem = dem_band.ReadAsArray()
@@ -309,7 +179,7 @@ def fill_depressions(dem_file: str, out_file: str) -> None:
     out_ds = create_dataset(
         out_file,
         no_data,
-        gdal.GDT_Float32,
+        dem_band.DataType,
         dem_band.XSize,
         dem_band.YSize,
         dem_ds.GetGeoTransform(),

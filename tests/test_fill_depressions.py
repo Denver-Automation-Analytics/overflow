@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 from numba import types, typed
-from overflow.fill_pits import priority_flood_tile, make_sides, handle_edge, handle_corner
+from overflow.fill_depressions.core import priority_flood_tile, make_sides
+from overflow.fill_depressions.tiled import handle_edge, handle_corner
 
 
 @pytest.fixture(name="dem_values")
@@ -34,6 +35,7 @@ def fixture_expected_filled_dem_labels():
         ]
     ).astype(int)
 
+
 @pytest.fixture(name="dem_values_with_nodata")
 def fixture_dem_values_with_nodata():
     """Create a small 5x5 raster for testing"""
@@ -48,6 +50,7 @@ def fixture_dem_values_with_nodata():
     ).astype(np.float32)
     return dem
 
+
 @pytest.fixture(name="expected_filled_dem_values_with_nodata")
 def fixture_expected_filled_dem_values_with_nodata():
     """Create a small 5x5 raster for testing"""
@@ -60,6 +63,7 @@ def fixture_expected_filled_dem_values_with_nodata():
             [10, 20, 30, 40, 50],
         ]
     ).astype(np.float32)
+
 
 @pytest.fixture(name="expected_filled_dem_labels_with_nodata")
 def fixture_expected_filled_dem_labels_with_nodata():
@@ -105,6 +109,7 @@ def test_fill_tile_bottom_left(
     assert graph[(1, 2)] == 21.0
     assert graph[(1, 3)] == 15.0
 
+
 def test_fill_tile_with_nodata_top(
     dem_values_with_nodata: np.ndarray,
     expected_filled_dem_values_with_nodata: np.ndarray,
@@ -117,6 +122,7 @@ def test_fill_tile_with_nodata_top(
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
     assert len(graph) == 1
     assert graph[(1, 2)] == -np.inf
+
 
 def test_fill_tile_with_nodata_right(
     dem_values_with_nodata: np.ndarray,
@@ -131,6 +137,7 @@ def test_fill_tile_with_nodata_right(
     assert len(graph) == 1
     assert graph[(1, 2)] == 50
 
+
 def test_fill_tile_with_nodata_no_edge(
     dem_values_with_nodata: np.ndarray,
     expected_filled_dem_values_with_nodata: np.ndarray,
@@ -143,17 +150,18 @@ def test_fill_tile_with_nodata_no_edge(
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
     assert len(graph) == 0
 
+
 def test_handle_edge():
     """Test handle_edge function produces expected graph"""
     dem_a = np.array([1, 2, 3, 4, 5])
     labels_a = np.array([2, 2, 3, 3, 2])
     dem_b = np.array([5, 4, 3, 2, 1])
     labels_b = np.array([5, 5, 6, 6, 5])
-    graph =  typed.Dict.empty(
+    graph = typed.Dict.empty(
         key_type=types.Tuple([types.int64, types.int64]),
         value_type=types.float32,
     )
-    graph[(2,5)] = 5
+    graph[(2, 5)] = 5
     no_data = -9999
 
     handle_edge(dem_a, labels_a, dem_b, labels_b, graph, no_data)
@@ -162,6 +170,7 @@ def test_handle_edge():
     assert len(graph) == 4
     for key, value in expected_graph.items():
         assert graph[key] == value
+
 
 def test_handle_corner():
     """Test handle_corner function produces expected graph"""
@@ -173,7 +182,7 @@ def test_handle_corner():
         key_type=types.Tuple([types.int64, types.int64]),
         value_type=types.float32,
     )
-    graph[2,5] = 6
+    graph[2, 5] = 6
     expected_graph = {(2, 5): 5}
     handle_corner(elev_a, label_a, elev_b, label_b, graph)
     assert len(graph) == 1

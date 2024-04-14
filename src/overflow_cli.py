@@ -5,7 +5,7 @@ from overflow.flow_direction import flow_direction
 from overflow.breach_paths_least_cost import breach_paths_least_cost
 from overflow.fix_flats.tiled import fix_flats_tiled
 from overflow.fix_flats.core import fix_flats_from_file
-from overflow.fill_pits import fill_depressions
+from overflow.fill_depressions.core import fill_depressions
 from overflow.constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_SEARCH_RADIUS,

@@ -57,3 +57,9 @@ FLOW_DIRECTIONS = np.array(
 FLOW_ACCUMULATION_NODATA = -9999
 FLOW_TERMINATES = (-1, -1)
 FLOW_EXTERNAL = (-2, -2)
+EDGE_LABEL = np.int32(1)  # edge label of fill depressions algorithm
+# Define flags for each side
+TOP = 0b0001  # Binary representation of 1
+RIGHT = 0b0010  # Binary representation of 2
+BOTTOM = 0b0100  # Binary representation of 4
+LEFT = 0b1000  # Binary representation of 8

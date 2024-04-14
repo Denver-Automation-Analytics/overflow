@@ -215,15 +215,13 @@ def raster_chunker(
             progress_bar.update(1)
 
 
-@jitclass(
-    [
-        ("row", int64),
-        ("column", int64),
-        ("cost", float32),
-    ]
-)
+@jitclass
 class GridCell:
     """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
+
+    row: int
+    column: int
+    cost: float
 
     def __init__(self, row, column, cost):
         self.row = row
@@ -236,6 +234,18 @@ class GridCell:
 
     def __eq__(self, other):
         return self.cost == other.cost
+
+    def __le__(self, other):
+        return self.cost <= other.cost
+
+    def __gt__(self, other):
+        return self.cost > other.cost
+
+    def __ge__(self, other):
+        return self.cost >= other.cost
+
+    def __ne__(self, other):
+        return self.cost != other.cost
 
 
 class Side(Enum):
