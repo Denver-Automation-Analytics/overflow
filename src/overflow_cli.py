@@ -5,6 +5,7 @@ from overflow.flow_direction import flow_direction
 from overflow.breach_paths_least_cost import breach_paths_least_cost
 from overflow.fix_flats.tiled import fix_flats_tiled
 from overflow.fix_flats.core import fix_flats_from_file
+from overflow.fill_pits import fill_depressions
 from overflow.constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_SEARCH_RADIUS,
@@ -197,6 +198,29 @@ def fix_flats_cli(
             fix_flats_tiled(dem_file, fdr_file, output_file, chunk_size, working_dir)
     except Exception as exc:
         print(f"fix_flats failed with the following exception: {str(exc)}")
+        # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
+        raise click.Abort()
+
+
+@main.command(name="fill-depressions")
+@click.option(
+    "--dem_file",
+    help="path to the GDAL supported raster dataset for the DEM",
+    required=True,
+)
+@click.option(
+    "--output_file",
+    help="path to the output file (must be GeoTiff)",
+    required=True,
+)
+def fill_depressions_cli(
+    dem_file: str,
+    output_file: str,
+):
+    try:
+        fill_depressions(dem_file, output_file)
+    except Exception as exc:
+        print(f"fill_depressions failed with the following exception: {str(exc)}")
         # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies
         raise click.Abort()
 

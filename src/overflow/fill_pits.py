@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit
 from numba.experimental import jitclass
 from osgeo import gdal
+from overflow.util.raster import open_dataset, create_dataset
 
 gdal.UseExceptions()
 
@@ -47,6 +48,7 @@ def make_sides(top=False, right=False, bottom=False, left=False):
         s |= LEFT
     return s
 
+
 @jitclass
 class GridCell:
     row: int
@@ -62,14 +64,19 @@ class GridCell:
     # add comparisons for values
     def __lt__(self, other):
         return self.value < other.value
+
     def __le__(self, other):
         return self.value <= other.value
+
     def __eq__(self, other):
         return self.value == other.value
+
     def __ne__(self, other):
         return self.value != other.value
+
     def __gt__(self, other):
         return self.value > other.value
+
     def __ge__(self, other):
         return self.value >= other.value
 
@@ -161,7 +168,7 @@ def priority_flood_tile(
                     label_pair = tuple(
                         (
                             min(labels[i, j], labels[ni, nj]),
-                            max(labels[i, j], labels[ni, nj])
+                            max(labels[i, j], labels[ni, nj]),
                         )
                     )
                     if label_pair not in graph or e < graph[label_pair]:
@@ -202,6 +209,7 @@ def priority_flood_tile(
 
     return labels, graph
 
+
 @njit
 def handle_edge(
     dem_a: np.ndarray,
@@ -209,7 +217,7 @@ def handle_edge(
     dem_b: np.ndarray,
     labels_b: np.ndarray,
     graph: dict[tuple[int, int], float],
-    no_data: float = -9999
+    no_data: float = -9999,
 ) -> None:
     """
     Combine two tiles by joining their edges.
@@ -242,14 +250,12 @@ def handle_edge(
             # Calculate the maximum elevation between the current cell and the neighboring cell
             e = max(elev_a, elev_b)
             label_pair = tuple(
-                (
-                    min(labels_a[i], labels_b[ni]),
-                    max(labels_a[i], labels_b[ni])
-                )
+                (min(labels_a[i], labels_b[ni]), max(labels_a[i], labels_b[ni]))
             )
             # update the graph
             if label_pair not in graph or e < graph[label_pair]:
                 graph[label_pair] = e
+
 
 @njit
 def handle_corner(
@@ -258,7 +264,7 @@ def handle_corner(
     elev_b: float,
     label_b: int,
     graph: dict[tuple[int, int], float],
-    no_data: float = -9999
+    no_data: float = -9999,
 ) -> None:
     """
     Combine two tiles by joining their corners.
@@ -286,13 +292,29 @@ def handle_corner(
 
     # Calculate the maximum elevation between the corner cell of tile A and tile B
     e = max(elev_a, elev_b)
-    label_pair = tuple(
-        (
-            min(label_a, label_b),
-            max(label_a, label_b)
-        )
-    )
+    label_pair = tuple((min(label_a, label_b), max(label_a, label_b)))
 
     # Update the graph
     if label_pair not in graph or e < graph[label_pair]:
         graph[label_pair] = e
+
+
+def fill_depressions(dem_file: str, out_file: str) -> None:
+    dem_ds = open_dataset(dem_file)
+    dem_band = dem_ds.GetRasterBand(1)
+    dem = dem_band.ReadAsArray()
+    no_data = dem_band.GetNoDataValue()
+    sides = make_sides()
+    priority_flood_tile(dem, sides, no_data)
+    out_ds = create_dataset(
+        out_file,
+        no_data,
+        gdal.GDT_Float32,
+        dem_band.XSize,
+        dem_band.YSize,
+        dem_ds.GetGeoTransform(),
+        dem_ds.GetProjection(),
+    )
+    out_band = out_ds.GetRasterBand(1)
+    out_band.WriteArray(dem)
+    out_band.FlushCache()
