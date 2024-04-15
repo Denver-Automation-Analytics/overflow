@@ -1,8 +1,13 @@
 import numpy as np
+from osgeo import gdal
 import pytest
 from numba import types, typed
 from overflow.fill_depressions.core import priority_flood_tile, make_sides
-from overflow.fill_depressions.tiled import handle_edge, handle_corner
+from overflow.fill_depressions.tiled import (
+    handle_edge,
+    handle_corner,
+    fill_depressions_tiled,
+)
 
 
 @pytest.fixture(name="dem_values")
@@ -34,6 +39,21 @@ def fixture_expected_filled_dem_labels():
             [2, 3, 3, 3, 2],
         ]
     ).astype(int)
+
+
+@pytest.fixture(name="dem_filepath")
+def fixture_dem_filepath(dem_values):
+    """Create a small 5x5 raster for testing"""
+    filepath = "/vsimem/dem.tif"
+    driver = gdal.GetDriverByName("GTiff")
+    ds = driver.Create(filepath, 5, 5, 1, gdal.GDT_Float32)
+    band = ds.GetRasterBand(1)
+    band.SetNoDataValue(-9999)
+    band.WriteArray(dem_values)
+    band = None
+    ds = None
+    yield filepath
+    gdal.Unlink(filepath)
 
 
 @pytest.fixture(name="dem_values_with_nodata")
@@ -86,12 +106,13 @@ def test_fill_tile_top_left(
 ):
     """Test filling single tile"""
     sides = make_sides(top=True, left=True)
-    labels, graph = priority_flood_tile(dem_values, sides)
+    labels, graph, max_label = priority_flood_tile(dem_values, sides)
     assert np.allclose(dem_values, expected_filled_dem_values)
     assert np.array_equal(labels, expected_filled_dem_labels)
     assert len(graph) == 2
     assert graph[(2, 3)] == 20.0
     assert graph[(1, 2)] == 15.0
+    assert max_label == 3
 
 
 def test_fill_tile_bottom_left(
@@ -101,13 +122,14 @@ def test_fill_tile_bottom_left(
 ):
     """Test filling single tile"""
     sides = make_sides(bottom=True, left=True)
-    labels, graph = priority_flood_tile(dem_values, sides)
+    labels, graph, max_label = priority_flood_tile(dem_values, sides)
     assert np.allclose(dem_values, expected_filled_dem_values)
     assert np.array_equal(labels, expected_filled_dem_labels)
     assert len(graph) == 3
     assert graph[(2, 3)] == 20.0
     assert graph[(1, 2)] == 21.0
     assert graph[(1, 3)] == 15.0
+    assert max_label == 3
 
 
 def test_fill_tile_with_nodata_top(
@@ -117,11 +139,12 @@ def test_fill_tile_with_nodata_top(
 ):
     """Test filling single tile"""
     sides = make_sides(top=True)
-    labels, graph = priority_flood_tile(dem_values_with_nodata, sides)
+    labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
     assert len(graph) == 1
     assert graph[(1, 2)] == -np.inf
+    assert max_label == 2
 
 
 def test_fill_tile_with_nodata_right(
@@ -131,11 +154,12 @@ def test_fill_tile_with_nodata_right(
 ):
     """Test filling single tile"""
     sides = make_sides(right=True)
-    labels, graph = priority_flood_tile(dem_values_with_nodata, sides)
+    labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
     assert len(graph) == 1
     assert graph[(1, 2)] == 50
+    assert max_label == 2
 
 
 def test_fill_tile_with_nodata_no_edge(
@@ -145,10 +169,11 @@ def test_fill_tile_with_nodata_no_edge(
 ):
     """Test filling single tile"""
     sides = make_sides()
-    labels, graph = priority_flood_tile(dem_values_with_nodata, sides)
+    labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
     assert len(graph) == 0
+    assert max_label == 2
 
 
 def test_handle_edge():
@@ -188,3 +213,18 @@ def test_handle_corner():
     assert len(graph) == 1
     for key, value in expected_graph.items():
         assert graph[key] == value
+
+
+def test_fill_depressions_tiled(dem_values, dem_filepath, expected_filled_dem_values):
+    """Test filling single tile"""
+    working_dir = "/vsimem"
+    chunk_size = 2
+    output_filepath = "/vsimem/filled_dem.tif"
+    fill_depressions_tiled(dem_filepath, output_filepath, chunk_size, working_dir)
+    ds = gdal.Open(output_filepath)
+    band = ds.GetRasterBand(1)
+    filled_dem = band.ReadAsArray()
+    assert np.allclose(filled_dem, expected_filled_dem_values)
+    band = None
+    ds = None
+    gdal.Unlink(output_filepath)

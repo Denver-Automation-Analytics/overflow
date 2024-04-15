@@ -1,23 +1,71 @@
 import tempfile
 import os
 import shutil
+import math
+from heapq import heappop, heappush
 import numpy as np
 from numba import njit
+from numba.typed import Dict  # pylint: disable=no-name-in-module
+from numba.types import DictType, int64, float32, UniTuple
 from numba.experimental import jitclass
 from osgeo import gdal
 from overflow.util.raster import open_dataset, create_dataset
 from overflow.fill_depressions.core import priority_flood_tile, make_sides
 from overflow.util.raster import Side, Corner, RasterChunk, raster_chunker
+from overflow.util.perimeter import (
+    get_tile_perimeter,
+    Int64Perimeter,
+    Float32Perimeter,
+)
 
 
-@jitclass
+@jitclass([("edges", DictType(UniTuple(int64, 2), float32))])
 class GlobalGraph:
-    edges
+    edges: dict
+
+    def __init__(self):
+        self.edges = Dict.empty((int64, int64), float32)
+
+    def update(self, local_graph: dict[tuple[int, int], float]) -> None:
+        self.edges.update(local_graph)
 
 
-@jitclass
+@jitclass(
+    [
+        ("label_perimeters", int64[:, :]),
+        ("elevation_perimeters", float32[:, :]),
+    ]
+)
 class GlobalState:
     graph: GlobalGraph
+    label_perimeters: np.ndarray
+    elevation_perimeters: np.ndarray
+    num_rows: int
+    num_cols: int
+    chunk_size: int
+    no_data: float
+
+    def __init__(self, num_rows: int, num_cols: int, chunk_size: int, no_data: float):
+        self.graph = GlobalGraph()
+        self.num_cols = num_cols
+        self.num_rows = num_rows
+        self.chunk_size = chunk_size
+        self.no_data = no_data
+        tile_count = num_rows * num_cols
+        perimeter_cell_count = 4 * chunk_size - 4
+
+        self.label_perimeters = np.empty(
+            (tile_count, perimeter_cell_count), dtype=np.int64
+        )
+        self.elevation_perimeters = np.empty(
+            (tile_count, perimeter_cell_count), dtype=np.float32
+        )
+
+    def update_graph(self, local_graph: dict[tuple[int, int], float]) -> None:
+        self.graph.update(local_graph)
+
+    def row_col_to_tile_index(self, row: int, col: int) -> int:
+        return row * self.num_cols + col
 
 
 @njit
@@ -109,23 +157,23 @@ def handle_corner(
         graph[label_pair] = e
 
 
-class Coordinate:
-    row: np.int32
-    col: np.int32
+class PerimeterData:
+    labels: Int64Perimeter
+    elevations: Float32Perimeter
 
-    def __init__(self, row, col):
-        self.row = row
-        self.col = col
-
-
-class DemLabelArr:
-    labels: np.ndarray
-    dem: np.ndarray
-
-
-class DemLabel:
-    label: int
-    dem: float
+    def __init__(self, global_state: GlobalState, tile_index: int):
+        self.labels = Int64Perimeter(
+            global_state.label_perimeters[tile_index],
+            global_state.chunk_size,
+            global_state.chunk_size,
+            tile_index,
+        )
+        self.elevations = Float32Perimeter(
+            global_state.elevation_perimeters[tile_index],
+            global_state.chunk_size,
+            global_state.chunk_size,
+            tile_index,
+        )
 
 
 LABELS_FILENAME = "labels.tif"
@@ -135,6 +183,8 @@ def setup_datasets(input_path, output_path, working_dir):
     dem_ds = open_dataset(input_path)
     input_band = dem_ds.GetRasterBand(1)
     no_data_value = input_band.GetNoDataValue()
+    if no_data_value is None:
+        raise ValueError("Input raster must have a no data value")
     geotransform = dem_ds.GetGeoTransform()
     projection = dem_ds.GetProjection()
     output_ds = create_dataset(
@@ -158,7 +208,7 @@ def setup_datasets(input_path, output_path, working_dir):
     return dem_ds, output_ds, labels_ds, no_data_value
 
 
-def depression_fill(input_path, output_path, chunk_size, working_dir):
+def fill_depressions_tiled(input_path, output_path, chunk_size, working_dir):
     """
     Fill depressions in a digital elevation model (DEM).
     Algorithm 3 from Parallel Priority-Flood (R. Barnes, 2016)
@@ -174,159 +224,124 @@ def depression_fill(input_path, output_path, chunk_size, working_dir):
     output_band = output_ds.GetRasterBand(1)
     labels_band = labels_ds.GetRasterBand(1)
     output_band = output_ds.GetRasterBand(1)
-    n_chunks_row, n_chunks_col = calculate_chunks(input_band, chunk_size)
-    global_spillover_graph = {}
+    n_chunks_row = math.ceil(input_band.YSize / chunk_size)
+    n_chunks_col = math.ceil(input_band.XSize / chunk_size)
+    global_state = GlobalState(n_chunks_row, n_chunks_col, chunk_size, no_data_value)
     label_offset = 0
     for tile_index, tile_dem in enumerate(raster_chunker(input_band, chunk_size)):
         sides = create_tile_side_flags(tile_dem, n_chunks_row, n_chunks_col)
         labels, graph, label_offset = priority_flood_tile(
-            tile_dem, sides, no_data_value, label_offset
+            tile_dem.data, sides, no_data_value, label_offset
         )
-        global_spillover_graph.update(graph)
+        global_state.update_graph(graph)
         labels_tile = RasterChunk(tile_dem.row, tile_dem.col, chunk_size, 0)
         labels_tile.from_numpy(labels)
         labels_tile.write(labels_band)
-    global_spillover_graph = connect_tile_edges_and_corners(
-        n_chunks_row, n_chunks_col, input_band, chunk_size, global_spillover_graph
-    )
-    elevation_graph = priority_flood_graph(global_spillover_graph)
-    for tile_index, tile_dem in enumerate(raster_chunker(input_band, chunk_size)):
-        tile_name = get_tile_labels_file_name(tile_index)
-        tile_labels = np.fromfile(tile_name, dtype=int)
-        raise_elevation(output_band, tile_labels, tile_dem, elevation_graph)
+        labels_band.FlushCache()
+        tile_dem.write(output_band)
+        output_band.FlushCache()
+        global_state.label_perimeters[tile_index] = get_tile_perimeter(labels)
+        global_state.elevation_perimeters[tile_index] = get_tile_perimeter(
+            tile_dem.data
+        )
+
+    labels_band.FlushCache()
+    labels_ds.FlushCache()
+    output_band.FlushCache()
+    output_ds.FlushCache()
+    connect_tile_edges_and_corners(global_state)
+    graph = build_graph(global_state, label_offset)
+    elevation_graph = priority_flood_graph(graph)
+    for tile_index, tile_dem in enumerate(raster_chunker(output_band, chunk_size)):
+        tile_labels = RasterChunk(tile_dem.row, tile_dem.col, chunk_size, 0)
+        tile_labels.read(labels_band)
+        raise_elevation(output_band, tile_labels.data, tile_dem, elevation_graph)
     if cleanup_working_dir:
         shutil.rmtree(working_dir)
+    output_band.FlushCache()
+    output_ds.FlushCache()
+    output_ds = None
+    labels_ds = None
 
 
-def connect_tile_edges_and_corners(
-    n_tiles_row, n_tiles_col, input_band, chunk_size, init_graph
-):
+def connect_tile_edges_and_corners(global_state):
     """Combine the spillover graphs of all tiles into a single global graph."""
-    spillover_graph = init_graph
-    tile_indexs_iter = walk_adjacent_tiles(n_tiles_row, n_tiles_col)
-    for top_l_i, top_r_i, bot_l_i, bot_r_i in tile_indexs_iter:
-        # + - - + - - +
-        # |  A  |  B  |
-        # + - - * - - +
-        # |  C  |  D  |
-        # + - - + - - +
-        tile_a = get_tile_labels_and_dem(top_l_i, n_tiles_col, input_band, chunk_size)
-        tile_b = get_tile_labels_and_dem(top_r_i, n_tiles_col, input_band, chunk_size)
-        tile_c = get_tile_labels_and_dem(bot_l_i, n_tiles_col, input_band, chunk_size)
-        tile_d = get_tile_labels_and_dem(bot_r_i, n_tiles_col, input_band, chunk_size)
-        # Connect A-B, A-C, D-B, D-C edges
-        combine_edge(tile_a, Side.RIGHT, tile_b, Side.LEFT, spillover_graph)
-        combine_edge(tile_a, Side.BOTTOM, tile_c, Side.TOP, spillover_graph)
-        combine_edge(tile_d, Side.TOP, tile_b, Side.BOTTOM, spillover_graph)
-        combine_edge(tile_d, Side.LEFT, tile_c, Side.RIGHT, spillover_graph)
-        # Connect A-D and B-C corners
-        combine_corner(
-            tile_a, Corner.BOTTOM_RIGHT, tile_d, Corner.TOP_LEFT, spillover_graph
-        )
-        combine_corner(
-            tile_b, Corner.BOTTOM_LEFT, tile_c, Corner.TOP_RIGHT, spillover_graph
-        )
-    return spillover_graph
+    for row_index in range(global_state.num_rows - 1):
+        for col_index in range(global_state.num_cols - 1):
+            # + - - + - - +
+            # |  A  |  B  |
+            # + - - * - - +
+            # |  C  |  D  |
+            # + - - + - - +
+            tile_index_a = global_state.row_col_to_tile_index(row_index, col_index)
+            tile_index_b = global_state.row_col_to_tile_index(row_index, col_index + 1)
+            tile_index_c = global_state.row_col_to_tile_index(row_index + 1, col_index)
+            tile_index_d = global_state.row_col_to_tile_index(
+                row_index + 1, col_index + 1
+            )
+            perimeter_data_a = PerimeterData(global_state, tile_index_a)
+            perimeter_data_b = PerimeterData(global_state, tile_index_b)
+            perimeter_data_c = PerimeterData(global_state, tile_index_c)
+            perimeter_data_d = PerimeterData(global_state, tile_index_d)
 
-
-def walk_adjacent_tiles(n_rows, n_cols):
-    """Returns (top_left, top_right, bottom_left, bottom_right) adjacent grid indicies"""
-    for row_index in range(n_rows - 1):
-        for col_index in range(n_cols - 1):
-            yield (
-                (row_index, col_index),
-                (row_index, col_index + 1),
-                (row_index + 1, col_index),
-                (row_index + 1, col_index + 1),
+            # Connect A-B, A-C, D-B, D-C edges
+            combine_edge(
+                perimeter_data_a, Side.RIGHT, perimeter_data_b, Side.LEFT, global_state
+            )
+            combine_edge(
+                perimeter_data_a, Side.BOTTOM, perimeter_data_c, Side.TOP, global_state
+            )
+            combine_edge(
+                perimeter_data_d, Side.TOP, perimeter_data_b, Side.BOTTOM, global_state
+            )
+            combine_edge(
+                perimeter_data_d, Side.LEFT, perimeter_data_c, Side.RIGHT, global_state
+            )
+            # Connect A-D and B-C corners
+            combine_corner(
+                perimeter_data_a,
+                Corner.BOTTOM_RIGHT,
+                perimeter_data_d,
+                Corner.TOP_LEFT,
+                global_state,
+            )
+            combine_corner(
+                perimeter_data_b,
+                Corner.BOTTOM_LEFT,
+                perimeter_data_c,
+                Corner.TOP_RIGHT,
+                global_state,
             )
 
 
 def combine_edge(
-    tile_a: DemLabelArr,
+    perimeter_data_a: PerimeterData,
     side_a: Side,
-    tile_b: DemLabelArr,
+    perimeter_data_b: PerimeterData,
     side_b: Side,
-    spillover_graph,
+    global_state: GlobalState,
 ):
     """Combine two tiles by joining their edges."""
-    edge_a = get_array_edge(tile_a.dem, side_a)
-    labels_a = get_array_edge(tile_a, side_a)
-    edge_b = get_array_edge(tile_b, side_b)
-    labels_b = get_array_edge(tile_b, side_b)
-    handle_edge(edge_a, labels_a, edge_b, labels_b, spillover_graph)
+    dem_a = perimeter_data_a.elevations.get_side(side_a)
+    labels_a = perimeter_data_a.labels.get_side(side_a)
+    dem_b = perimeter_data_b.elevations.get_side(side_b)
+    labels_b = perimeter_data_b.labels.get_side(side_b)
+    handle_edge(dem_a, labels_a, dem_b, labels_b, global_state.graph.edges)
 
 
 def combine_corner(
-    tile_a: DemLabelArr,
+    perimeter_data_a: PerimeterData,
     corner_a: Corner,
-    tile_b: DemLabelArr,
+    perimeter_data_b: PerimeterData,
     corner_b: Corner,
-    spillover_graph,
+    global_state: GlobalState,
 ):
     """Combine two tiles by joining their corners."""
-    a = get_array_corner(tile_a, corner_a)
-    b = get_array_corner(tile_b, corner_b)
-    handle_corner(a.dem, a.label, b.dem, b.label, spillover_graph)
-
-
-def get_tile_labels_and_dem(tile_location, n_cols, band, chunk_size):
-    chunk_index = get_chunk_index_from_location(tile_location, n_cols)
-    labels = np.fromfile(get_tile_labels_file_name(chunk_index), dtype=float)
-    dem = read_tile(band, chunk_size, tile_location[0], tile_location[1])
-    return DemLabelArr(labels, dem)
-
-
-def get_array_corner(arr: DemLabelArr, corner: Corner):
-    """Returns the value of the corner of the array specified by the corner enum"""
-    if corner == Corner.TOP_LEFT:
-        return DemLabel(arr.dem[0, 0], arr.labels[0, 0])
-    if corner == Corner.TOP_RIGHT:
-        return DemLabel(arr.dem[0, -1], arr.labels[0, -1])
-    if corner == Corner.BOTTOM_RIGHT:
-        return DemLabel(arr.dem[-1, -1], arr.labels[-1, -1])
-    if corner == Corner.BOTTOM_LEFT:
-        return DemLabel(arr.dem[-1, 0], arr.labels[-1, 0])
-
-
-def get_array_edge(arr: np.ndarray, side: Side):
-    """Returns the edge vector of the array specified by the side enum"""
-    if side == Side.TOP:
-        return arr[0, :]
-    if side == Side.RIGHT:
-        return arr[:, -1]
-    if side == Side.BOTTOM:
-        return arr[-1, :]
-    if side == Side.LEFT:
-        return arr[:, 0]
-
-
-def get_tile_labels_file_name(tile_index):
-    return f"tile-labels-{tile_index}.dat"
-
-
-def get_chunk_index_from_location(location, n_cols):
-    row_index, col_index = location
-    return row_index * n_cols + col_index
-
-
-def get_vertical_edges(n_rows, n_cols):
-    """Returns (left, right) pairs of tile locations for vertical edges"""
-    for row_index in range(n_rows):
-        for col_index in range(n_cols - 1):
-            yield ((row_index, col_index), (row_index, col_index + 1))
-
-
-def get_horizontal_edges(n_rows, n_cols):
-    """Returns (top, bottom) pairs of tile locations for horizontal edges"""
-    for row_index in range(n_rows - 1):
-        for col_index in range(n_cols):
-            yield ((row_index, col_index), (row_index + 1, col_index))
-
-
-def calculate_chunks(band: gdal.Band, chunk_size: int):
-    n_chunks_row = (band.YSize + chunk_size - 1) // chunk_size
-    n_chunks_col = (band.XSize + chunk_size - 1) // chunk_size
-    return n_chunks_row, n_chunks_col
+    dem_a = perimeter_data_a.elevations.get_corner(corner_a)
+    labels_a = perimeter_data_a.labels.get_corner(corner_a)
+    dem_b = perimeter_data_b.elevations.get_corner(corner_b)
+    labels_b = perimeter_data_b.labels.get_corner(corner_b)
+    handle_corner(dem_a, labels_a, dem_b, labels_b, global_state.graph.edges)
 
 
 def create_tile_side_flags(tile: RasterChunk, n_chunks_row: int, n_chunks_col: int):
@@ -337,7 +352,19 @@ def create_tile_side_flags(tile: RasterChunk, n_chunks_row: int, n_chunks_col: i
     return make_sides(top, right, bottom, left)
 
 
-def priority_flood_graph(mastergraph: list[dict[int, float]]):
+def build_graph(global_state: GlobalState, max_label) -> list:
+    graph = [[] for _ in range(max_label)]
+    for label_pair in global_state.graph.edges:
+        graph[label_pair[0]].append(
+            (label_pair[1], global_state.graph.edges[label_pair])
+        )
+        graph[label_pair[1]].append(
+            (label_pair[0], global_state.graph.edges[label_pair])
+        )
+    return graph
+
+
+def priority_flood_graph(graph: list[list[tuple[int, float]]]):
     """
     Modified priority flood algorithm for graph
 
@@ -346,24 +373,48 @@ def priority_flood_graph(mastergraph: list[dict[int, float]]):
     Algorithm 2 from priority-flood (r. barnes, 2015)
     https://arxiv.org/pdf/1511.04463.pdf
     """
-    open_heap: list[tuple[float, int]] = [(float("-inf"), 1)]
-    seen: set[int] = set()
-    elevation_graph: dict[int, float] = {}
+    open_heap = [(float("-inf"), 1)]
+    closed = np.zeros(len(graph), dtype=bool)
+    graph_elev = np.zeros(len(graph), dtype=float)
 
     while open_heap:
-        cell_elevation, vertex_label = heappop(open_heap)
-        if vertex_label in seen:
+        elev, node = heappop(open_heap)
+        if closed[node]:
             continue
-        seen.add(vertex_label)
-        elevation_graph[vertex_label] = cell_elevation
+        closed[node] = True
+        graph_elev[node] = elev
+        for neighbor, neighbor_elev in graph[node]:
+            if not closed[neighbor]:
+                max_height = max(elev, neighbor_elev)
+                new_node = (max_height, neighbor)
+                heappush(open_heap, new_node)
 
-        for node_label, node_elevation in mastergraph[vertex_label].items():
-            if node_label in seen:
-                continue
-            max_height = max(cell_elevation, node_elevation)
-            new_node = (max_height, node_label)
-            heappush(open_heap, new_node)
-    return elevation_graph
+    return graph_elev
+
+    # open_heap: list[tuple[float, int]] = [(float("-inf"), 1)]
+    # pit_queue: list[tuple[float, int]] = []
+    # closed = np.zeros(len(graph), dtype=bool)
+    # graph_elev = np.zeros(len(graph), dtype=float)
+
+
+#
+# while open_heap or pit_queue:
+#     if pit_queue:
+#         elev, node = pit_queue.pop(0)
+#     else:
+#         elev, node = heappop(open_heap)
+#     if closed[node]:
+#         continue
+#     closed[node] = True
+#     graph_elev[node] = elev
+#     for neighbor, neighbor_elev in graph[node]:
+#         if not closed[neighbor]:
+#             if neighbor_elev <= elev:
+#                 heappush(open_heap, (elev, neighbor))
+#             else:
+#                 pit_queue.append((neighbor_elev, neighbor))
+#
+# return graph_elev
 
 
 def raise_elevation(
@@ -373,10 +424,10 @@ def raise_elevation(
     global_labels,
 ):
     """Raise elevation of dem to match global labels"""
-    n_row, n_col = tile_dem.shape
+    n_row, n_col = tile_dem.data.shape
     for row in range(n_row):
         for col in range(n_col):
-            height = tile_dem[row, col]
+            height = tile_dem.data[row, col]
             label = tile_labels[row, col]
-            tile_dem[row, col] = max(global_labels[label], height)
+            tile_dem.data[row, col] = max(global_labels[label], height)
     tile_dem.write(output_band)
