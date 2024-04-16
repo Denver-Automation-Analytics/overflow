@@ -105,7 +105,7 @@ def test_breach_paths_cuda_random(random_dem_from_file, random_dem):
         output_path,
         chunk_size=1000,
         search_radius=100,
-        max_pits=2000,
+        max_pits=100,
     )
     dataset = gdal.Open(output_path)
     band = dataset.GetRasterBand(1)

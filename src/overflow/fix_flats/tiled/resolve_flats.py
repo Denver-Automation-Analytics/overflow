@@ -4,10 +4,10 @@ import numpy as np
 from overflow.constants import FLOW_DIRECTION_UNDEFINED, FLOW_DIRECTION_NODATA
 from overflow.util.raster import neighbor_generator
 from overflow.fix_flats.core.fix_flats import label_flats
-from overflow.util.queue import Queue
+from overflow.util.queue import RowColQueue as Queue
 
 
-@njit(cache=True)
+@njit
 def compute_gradient(
     labels: np.ndarray,
     fdr: np.ndarray,
@@ -43,7 +43,9 @@ def compute_gradient(
     marker = (-1, -1)
     edges_cells.push(marker)
     while len(edges_cells) > 1:
-        row, col = edges_cells.pop()
+        record = edges_cells.pop()
+        row = record["row"]
+        col = record["col"]
         # Check if the marker is encountered, indicating the end of a loop
         if row == marker[0] and col == marker[1]:
             loops += 1
@@ -66,7 +68,7 @@ def compute_gradient(
     return graident
 
 
-@njit(cache=True)
+@njit
 def flat_edges_tile(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     """
     Detects high and low edge cells in a tile. This is the tiled version of Algorithm 3 FlatEdges
@@ -114,7 +116,7 @@ def flat_edges_tile(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     return high_edges, low_edges
 
 
-@njit(cache=True)
+@njit
 def compute_labels_and_gradients(
     dem: np.ndarray, flow_dirs: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list, list]:

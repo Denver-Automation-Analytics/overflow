@@ -6,7 +6,7 @@ from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_NODATA,
 )
-from overflow.util.queue import Queue
+from overflow.util.queue import RowColInt64Queue as Queue
 
 
 @njit
@@ -174,7 +174,10 @@ def label_watersheds(
             watersheds[row, col] = watershed_id
 
             while queue:
-                r, c, watershed_id = queue.pop()
+                record = queue.pop()
+                r = record["row"]
+                c = record["col"]
+                watershed_id = record["value"]
                 if (r + row_offset, c + col_offset) in drainage_points:
                     prev_watershed_id = watershed_id
                     watershed_id = r * cols + c + 1 + id_offset

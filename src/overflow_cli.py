@@ -6,6 +6,7 @@ from overflow.breach_paths_least_cost import breach_paths_least_cost
 from overflow.fix_flats.tiled import fix_flats_tiled
 from overflow.fix_flats.core import fix_flats_from_file
 from overflow.fill_depressions.core import fill_depressions
+from overflow.fill_depressions.tiled import fill_depressions_tiled
 from overflow.constants import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_SEARCH_RADIUS,
@@ -213,12 +214,48 @@ def fix_flats_cli(
     help="path to the output file (must be GeoTiff)",
     required=True,
 )
+@click.option(
+    "--chunk_size",
+    help="chunk size",
+    default=DEFAULT_CHUNK_SIZE,
+)
+@click.option(
+    "--working_dir",
+    help="working directory",
+)
 def fill_depressions_cli(
     dem_file: str,
     output_file: str,
+    chunk_size: int,
+    working_dir: str | None,
 ):
+    """
+    This function is used to fill depressions in a DEM.
+    The function takes filepath to a GDAL supported raster dataset as
+    input and prodeces an output DEM with filled depressions.
+
+    Parameters
+    ----------
+    dem_file : str
+        Path to the input dem file
+    output_file : str
+        Path to the output file
+    chunk_size : int
+        Size of the chunk to be used for processing. Larger chunk sizes will use more memory.
+        If chunk_size is less than or equal to 1, the fill_depressions function is called
+        which fills depressions with an all in RAM algorithm.
+    working_dir : str
+        Working directory to store temporary files
+
+    Returns
+    -------
+    None
+    """
     try:
-        fill_depressions(dem_file, output_file)
+        if chunk_size <= 1:
+            fill_depressions(dem_file, output_file)
+        else:
+            fill_depressions_tiled(dem_file, output_file, chunk_size, working_dir)
     except Exception as exc:
         print(f"fill_depressions failed with the following exception: {str(exc)}")
         # exit with non-zero exit code. Everytime zero is returned on failure a baby kitten dies

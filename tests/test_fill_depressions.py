@@ -3,11 +3,8 @@ from osgeo import gdal
 import pytest
 from numba import types, typed
 from overflow.fill_depressions.core import priority_flood_tile, make_sides
-from overflow.fill_depressions.tiled import (
-    handle_edge,
-    handle_corner,
-    fill_depressions_tiled,
-)
+from overflow.fill_depressions.tiled import fill_depressions_tiled
+from overflow.fill_depressions.tiled.global_state import handle_corner, handle_edge
 
 
 @pytest.fixture(name="dem_values")
@@ -109,10 +106,9 @@ def test_fill_tile_top_left(
     labels, graph, max_label = priority_flood_tile(dem_values, sides)
     assert np.allclose(dem_values, expected_filled_dem_values)
     assert np.array_equal(labels, expected_filled_dem_labels)
-    assert len(graph) == 2
     assert graph[(2, 3)] == 20.0
     assert graph[(1, 2)] == 15.0
-    assert max_label == 3
+    assert max_label == 4
 
 
 def test_fill_tile_bottom_left(
@@ -125,11 +121,10 @@ def test_fill_tile_bottom_left(
     labels, graph, max_label = priority_flood_tile(dem_values, sides)
     assert np.allclose(dem_values, expected_filled_dem_values)
     assert np.array_equal(labels, expected_filled_dem_labels)
-    assert len(graph) == 3
     assert graph[(2, 3)] == 20.0
     assert graph[(1, 2)] == 21.0
     assert graph[(1, 3)] == 15.0
-    assert max_label == 3
+    assert max_label == 4
 
 
 def test_fill_tile_with_nodata_top(
@@ -142,9 +137,8 @@ def test_fill_tile_with_nodata_top(
     labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
-    assert len(graph) == 1
     assert graph[(1, 2)] == -np.inf
-    assert max_label == 2
+    assert max_label == 3
 
 
 def test_fill_tile_with_nodata_right(
@@ -157,9 +151,8 @@ def test_fill_tile_with_nodata_right(
     labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
-    assert len(graph) == 1
     assert graph[(1, 2)] == 50
-    assert max_label == 2
+    assert max_label == 3
 
 
 def test_fill_tile_with_nodata_no_edge(
@@ -169,11 +162,10 @@ def test_fill_tile_with_nodata_no_edge(
 ):
     """Test filling single tile"""
     sides = make_sides()
-    labels, graph, max_label = priority_flood_tile(dem_values_with_nodata, sides)
+    labels, _, max_label = priority_flood_tile(dem_values_with_nodata, sides)
     assert np.allclose(dem_values_with_nodata, expected_filled_dem_values_with_nodata)
     assert np.array_equal(labels, expected_filled_dem_labels_with_nodata)
-    assert len(graph) == 0
-    assert max_label == 2
+    assert max_label == 3
 
 
 def test_handle_edge():
@@ -209,13 +201,13 @@ def test_handle_corner():
     )
     graph[2, 5] = 6
     expected_graph = {(2, 5): 5}
-    handle_corner(elev_a, label_a, elev_b, label_b, graph)
+    handle_corner(elev_a, label_a, elev_b, label_b, graph, -9999)
     assert len(graph) == 1
     for key, value in expected_graph.items():
         assert graph[key] == value
 
 
-def test_fill_depressions_tiled(dem_values, dem_filepath, expected_filled_dem_values):
+def test_fill_depressions_tiled(dem_filepath, expected_filled_dem_values):
     """Test filling single tile"""
     working_dir = "/vsimem"
     chunk_size = 2

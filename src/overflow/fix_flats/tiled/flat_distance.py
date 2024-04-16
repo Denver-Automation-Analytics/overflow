@@ -1,11 +1,11 @@
 from numba import njit, prange
 import numpy as np
-from overflow.util.queue import Queue
+from overflow.util.queue import RowColQueue as Queue
 from overflow.util.raster import neighbor_generator
 from overflow.util.perimeter import Int64Perimeter, get_tile_perimeter
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True)
 def compute_min_dist(labels_array: np.ndarray) -> np.ndarray:
     """
     Compute the minimum distances between perimeter cells with the same label.
@@ -43,7 +43,9 @@ def compute_min_dist(labels_array: np.ndarray) -> np.ndarray:
         queue = Queue([(from_row, from_col)])
         queue.push(marker)
         while len(queue) > 1:
-            row, col = queue.pop()
+            record = queue.pop()
+            row = record["row"]
+            col = record["col"]
             if (row, col) == marker:
                 dist += 1
                 queue.push(marker)
