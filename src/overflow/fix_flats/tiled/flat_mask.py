@@ -9,7 +9,7 @@ import numpy as np
 from osgeo import gdal
 from overflow.util.raster import raster_chunker, RasterChunk
 from overflow.util.perimeter import Int64Perimeter
-from overflow.util.queue import RowColQueue as Queue
+from overflow.util.queue import Int64PairQueue as Queue
 from overflow.constants import FLOW_DIRECTION_UNDEFINED
 from overflow.util.raster import neighbor_generator
 from overflow.numba_types import Int64PairList
@@ -106,9 +106,7 @@ def away_from_higher_tile(
     interior_high_edges = Queue(interior_high_edges)
     loops = 1
     while len(interior_high_edges) > 1 or loops < max_high_loop:
-        record = interior_high_edges.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = interior_high_edges.pop()
         if row == marker[0] and col == marker[1]:
             loops += 1
             if loops in loop_index_map:
@@ -180,9 +178,7 @@ def towards_lower_tile(
     flat_mask *= -1
 
     while len(interior_low_edges) > 1 or loops < max_low_loop:
-        record = interior_low_edges.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = interior_low_edges.pop()
         if row == marker[0] and col == marker[1]:
             loops += 1
             if loops in loop_index_map:

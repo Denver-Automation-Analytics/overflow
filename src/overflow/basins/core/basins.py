@@ -6,7 +6,8 @@ from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTION_NODATA,
 )
-from overflow.util.queue import RowColInt64Queue as Queue
+from overflow.util.queue import GridCellInt64Queue as Queue
+from overflow.util.raster import GridCellInt64 as GridCell
 
 
 @njit
@@ -170,14 +171,14 @@ def label_watersheds(
         col = index % cols
         if is_outlet(fdr, row, col):
             watershed_id = row * cols + col + 1 + id_offset
-            queue = Queue([(row, col, watershed_id)])
+            queue = Queue([GridCell(row, col, watershed_id)])
             watersheds[row, col] = watershed_id
 
             while queue:
-                record = queue.pop()
-                r = record["row"]
-                c = record["col"]
-                watershed_id = record["value"]
+                cell = queue.pop()
+                r = cell.row
+                c = cell.col
+                watershed_id = cell.value
                 if (r + row_offset, c + col_offset) in drainage_points:
                     prev_watershed_id = watershed_id
                     watershed_id = r * cols + c + 1 + id_offset
@@ -188,7 +189,7 @@ def label_watersheds(
                     watersheds[r, c] = watershed_id
                 for n_row, n_col in upstream_neighbor_generator(fdr, r, c):
                     watersheds[n_row, n_col] = watershed_id
-                    queue.push((n_row, n_col, watershed_id))
+                    queue.push(GridCell(n_row, n_col, watershed_id))
 
     # Create local graph from downstream_watersheds and drainage_points
     local_graph = Dict.empty(int64, int64)

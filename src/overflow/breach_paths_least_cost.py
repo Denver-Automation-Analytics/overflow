@@ -3,7 +3,7 @@ import heapq
 from numba import njit, prange
 from osgeo import gdal
 import numpy as np
-from .util.raster import GridCell, raster_chunker
+from .util.raster import GridCellFloat32 as GridCell, raster_chunker
 from .breach_single_cell_pits import breach_single_cell_pits_in_chunk
 from .constants import (
     DEFAULT_CHUNK_SIZE,
@@ -230,9 +230,9 @@ def breach_pits_in_chunk_least_cost(
             # dequeue the cell with the lowest cost
             cell = heapq.heappop(heap)
             current_cost, current_row[i], current_col[i] = (
-                cell.cost,
+                cell.value,
                 cell.row,
-                cell.column,
+                cell.col,
             )
             # if this cell can be breached, stop
             if (

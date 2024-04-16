@@ -4,7 +4,7 @@ import numpy as np
 from overflow.constants import FLOW_DIRECTION_UNDEFINED, FLOW_DIRECTION_NODATA
 from overflow.util.raster import neighbor_generator
 from overflow.fix_flats.core.fix_flats import label_flats
-from overflow.util.queue import RowColQueue as Queue
+from overflow.util.queue import Int64PairQueue as Queue
 
 
 @njit
@@ -43,9 +43,7 @@ def compute_gradient(
     marker = (-1, -1)
     edges_cells.push(marker)
     while len(edges_cells) > 1:
-        record = edges_cells.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = edges_cells.pop()
         # Check if the marker is encountered, indicating the end of a loop
         if row == marker[0] and col == marker[1]:
             loops += 1

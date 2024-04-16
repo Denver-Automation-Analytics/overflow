@@ -1,21 +1,16 @@
-from numba import int64, float32, literal_unroll
-from numba.types import Array, Record
+from numba import int64
+from numba.types import ListType
+from numba.typed import List  # pylint: disable=no-name-in-module
 from numba.experimental import jitclass
-import numpy as np
+from overflow.util.raster import GridCellFloat32, GridCellInt64
+from overflow.numba_types import Int64Pair
 
 
-def create_queue_class(numba_type, fields):
+def create_queue_class(numba_type):
     spec = [
         ("_front", int64),
         ("_size", int64),
-        (
-            "_data",
-            Array(
-                numba_type,
-                1,
-                "C",
-            ),
-        ),
+        ("_data", ListType(numba_type)),
     ]
 
     @jitclass(spec)
@@ -36,7 +31,7 @@ def create_queue_class(numba_type, fields):
             The underlying data array storing the elements of the queue.
         """
 
-        def __init__(self, data):
+        def __init__(self, data: list):
             """
             Initialize the queue with the given data.
 
@@ -45,16 +40,13 @@ def create_queue_class(numba_type, fields):
             data : list or np.ndarray
                 The initial data to populate the queue.
             """
+            if len(data) == 0:
+                raise ValueError("list must not be empty")
             self._front = 0
-            self._data = np.empty(len(data), dtype=numba_type)
-            for i, elem in enumerate(data):
-                j = 0
-                for f in literal_unroll(fields):
-                    self._data[i][f] = elem[j]
-                    j += 1
-            self._size = self._data.shape[0]
-            if self._size == 0:
-                self._resize(1)
+            self._data = List.empty_list(numba_type)
+            for value in data:
+                self._data.append(value)
+            self._size = len(self._data)
 
         def push(self, value):
             """
@@ -67,10 +59,7 @@ def create_queue_class(numba_type, fields):
             """
             if self._size == len(self._data):
                 self._resize(2 * len(self._data))
-            i = 0
-            for f in literal_unroll(fields):
-                self._data[(self._front + self._size) % len(self._data)][f] = value[i]
-                i += 1
+            self._data[(self._front + self._size) % len(self._data)] = value
             self._size += 1
 
         def pop(self):
@@ -92,7 +81,7 @@ def create_queue_class(numba_type, fields):
             value = self._data[self._front]
             self._front = (self._front + 1) % len(self._data)
             self._size -= 1
-            if self._size < len(self._data) // 4:
+            if self._size != 0 and self._size < len(self._data) // 4:
                 self._resize(len(self._data) // 2)
             return value
 
@@ -105,13 +94,19 @@ def create_queue_class(numba_type, fields):
             new_capacity : int
                 The new capacity for the data array.
             """
-            old_shape = self._data.shape
-            new_shape = (new_capacity,) + old_shape[1:]
-            new_data = np.empty(new_shape, dtype=self._data.dtype)
+            new_data = List.empty_list(numba_type)
             old_len = min(len(self._data), new_capacity)
-            new_data[:old_len] = np.concatenate(
-                (self._data[self._front :], self._data[: self._front])
-            )[:old_len]
+
+            for i in range(old_len):
+                new_data.append(self._data[(self._front + i) % len(self._data)])
+
+            if old_len < new_capacity:
+                # fill remaining with junk data
+                # since python has no concept of uninitialized memory
+                junk = self._data[0]  # always at least one element
+                for i in range(new_capacity - old_len):
+                    new_data.append(junk)
+
             self._data = new_data
             self._front = 0
 
@@ -129,116 +124,9 @@ def create_queue_class(numba_type, fields):
     return Queue
 
 
-RowColRecord = Record(
-    [
-        (
-            "row",
-            {
-                "type": int64,
-                "offset": 0,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-        (
-            "col",
-            {
-                "type": int64,
-                "offset": 8,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-    ],
-    16,
-    False,
-)
-
-RowColFields = (
-    "row",
-    "col",
-)
-
-RowColInt64Record = Record(
-    [
-        (
-            "row",
-            {
-                "type": int64,
-                "offset": 0,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-        (
-            "col",
-            {
-                "type": int64,
-                "offset": 8,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-        (
-            "value",
-            {
-                "type": int64,
-                "offset": 16,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-    ],
-    24,
-    False,
-)
-
-RowColInt64Fields = (
-    "row",
-    "col",
-    "value",
-)
-
-RowColFloat32Record = Record(
-    [
-        (
-            "row",
-            {
-                "type": int64,
-                "offset": 0,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-        (
-            "col",
-            {
-                "type": int64,
-                "offset": 8,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-        (
-            "value",
-            {
-                "type": float32,
-                "offset": 16,
-                "alignment": None,
-                "title": None,
-            },
-        ),
-    ],
-    20,
-    False,
-)
-
-RowColFloat32Fields = (
-    "row",
-    "col",
-    "value",
-)
-
-RowColQueue = create_queue_class(RowColRecord, RowColFields)
-RowColInt64Queue = create_queue_class(RowColInt64Record, RowColInt64Fields)
-RowColFloat32Queue = create_queue_class(RowColFloat32Record, RowColFloat32Fields)
+# pylint: disable=no-member
+Int64PairQueue = create_queue_class(Int64Pair)
+# pylint: disable=no-member
+GridCellInt64Queue = create_queue_class(GridCellInt64.class_type.instance_type)
+# pylint: disable=no-member
+GridCellFloat32Queue = create_queue_class(GridCellFloat32.class_type.instance_type)

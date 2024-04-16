@@ -10,7 +10,7 @@ from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
 )
-from overflow.util.queue import RowColQueue as Queue
+from overflow.util.queue import Int64PairQueue as Queue
 
 
 @njit
@@ -101,9 +101,7 @@ def label_flats(
     to_be_filled = Queue([(flat_row, flat_col)])
     elev = dem[flat_row, flat_col]
     while len(to_be_filled) > 0:
-        record = to_be_filled.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = to_be_filled.pop()
         not_in_bounds = row < 0 or row >= dem.shape[0] or col < 0 or col >= dem.shape[1]
         if not_in_bounds:
             continue
@@ -151,9 +149,7 @@ def away_from_higher(
     marker = (-1, -1)
     high_edges.push(marker)
     while len(high_edges) > 1:
-        record = high_edges.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = high_edges.pop()
         if row == marker[0] and col == marker[1]:
             loops += 1
             high_edges.push(marker)
@@ -208,9 +204,7 @@ def towards_lower(
     low_edges.push(marker)
     max_flat_height = (2**31 - 1) // 2
     while len(low_edges) > 1:
-        record = low_edges.pop()
-        row = record["row"]
-        col = record["col"]
+        row, col = low_edges.pop()
         if row == marker[0] and col == marker[1]:
             loops += 1
             low_edges.push(marker)

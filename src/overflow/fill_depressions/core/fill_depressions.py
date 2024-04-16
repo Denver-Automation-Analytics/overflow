@@ -1,7 +1,11 @@
 from heapq import heappush, heappop
 import numpy as np
 from numba import njit, float32
-from overflow.util.raster import open_dataset, create_dataset, GridCell
+from overflow.util.raster import (
+    open_dataset,
+    create_dataset,
+    GridCellFloat32 as GridCell,
+)
 from overflow.constants import (
     EDGE_LABEL,
     NEIGHBOR_OFFSETS,
@@ -11,7 +15,7 @@ from overflow.constants import (
     LEFT,
 )
 from overflow.fill_depressions.core.watershed_graph import WatershedGraph
-from overflow.util.queue import RowColFloat32Queue as Queue
+from overflow.util.queue import GridCellFloat32Queue as Queue
 
 
 @njit
@@ -59,10 +63,9 @@ def priority_flood_tile(
 
     # let numba infer type by initalizing with dummy value
     # and immediately popping it
-    init_cell = GridCell(0, 0, dem[0, 0])
-    open_heap = [init_cell]
+    open_heap = [GridCell(0, 0, dem[0, 0])]
     open_heap.pop()
-    pit_queue = Queue([(0, 0, dem[0, 0])])
+    pit_queue = Queue([GridCell(0, 0, dem[0, 0])])
     pit_queue.pop()
     minus_inf = float32(-np.inf)
 
@@ -84,15 +87,15 @@ def priority_flood_tile(
     # process cells until both the open heap and pit queue are empty
     while open_heap or pit_queue:
         if pit_queue:
-            record = pit_queue.pop()
-            i = record["row"]
-            j = record["col"]
-            c = record["value"]
+            cell = pit_queue.pop()
+            i = cell.row
+            j = cell.col
+            c = cell.value
         else:
             cell = heappop(open_heap)
-            c = cell.cost
+            c = cell.value
             i = cell.row
-            j = cell.column
+            j = cell.col
 
         # process the current cell
         if labels[i, j] == 0:
@@ -130,7 +133,7 @@ def priority_flood_tile(
                     labels[ni, nj] = labels[i, j]
                     if dem_n <= c:
                         dem[ni, nj] = c if c != minus_inf else no_data
-                        pit_queue.push((ni, nj, c))
+                        pit_queue.push(GridCell(ni, nj, c))
                     else:
                         heappush(open_heap, GridCell(ni, nj, dem_n))
 

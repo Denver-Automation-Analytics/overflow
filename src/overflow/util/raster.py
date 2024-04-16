@@ -215,37 +215,54 @@ def raster_chunker(
             progress_bar.update(1)
 
 
+def create_grid_cell_class(value_type):
+    @jitclass
+    class GridCell:
+        """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
+
+        row: int64
+        col: int64
+        value: value_type
+
+        def __init__(self, row, col, value):
+            self.row = row
+            self.col = col
+            self.value = value
+
+        # Define comparison methods based on the cost attribute so this can be used in a heapq
+        def __lt__(self, other):
+            return self.value < other.value
+
+        def __eq__(self, other):
+            return self.value == other.value
+
+        def __le__(self, other):
+            return self.value <= other.value
+
+        def __gt__(self, other):
+            return self.value > other.value
+
+        def __ge__(self, other):
+            return self.value >= other.value
+
+        def __ne__(self, other):
+            return self.value != other.value
+
+    return GridCell
+
+
+GridCellInt64 = create_grid_cell_class(int64)
+GridCellFloat32 = create_grid_cell_class(float32)
+
+
 @jitclass
-class GridCell:
-    """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
+class GridCoordinate:
+    row: int64
+    col: int64
 
-    row: int
-    column: int
-    cost: float
-
-    def __init__(self, row, column, cost):
+    def __init__(self, row, col):
         self.row = row
-        self.column = column
-        self.cost = cost
-
-    # Define comparison methods based on the cost attribute so this can be used in a heapq
-    def __lt__(self, other):
-        return self.cost < other.cost
-
-    def __eq__(self, other):
-        return self.cost == other.cost
-
-    def __le__(self, other):
-        return self.cost <= other.cost
-
-    def __gt__(self, other):
-        return self.cost > other.cost
-
-    def __ge__(self, other):
-        return self.cost >= other.cost
-
-    def __ne__(self, other):
-        return self.cost != other.cost
+        self.col = col
 
 
 class Side(Enum):
