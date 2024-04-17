@@ -4,7 +4,7 @@ import numpy as np
 DEFAULT_SEARCH_RADIUS = 200
 DEFAULT_MAX_PITS = 24
 UNVISITED_INDEX = -1
-EPSILON_GRADIENT = 1e-5  # small value to apply to gradient of breaching to nodata cells
+EPSILON_GRADIENT = 0  # small value to apply to gradient of breaching to nodata cells
 DEFAULT_CHUNK_SIZE = 2000
 
 #   3  |   2    |  1

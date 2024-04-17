@@ -23,6 +23,7 @@ def make_sides(top=False, right=False, bottom=False, left=False):
     # Initialize variable
     s = 0
     # Set flags based on input
+
     if top:
         s |= TOP
     if right:

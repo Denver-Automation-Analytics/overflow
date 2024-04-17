@@ -152,11 +152,13 @@ def reconstruct_path(
                     dem[path_row, path_col],
                 )
         else:
+            # testing without a gradient produces better results
             dem[path_row, path_col] = min(
-                (
-                    final_elevation
-                    + (init_elevation - final_elevation) * j / path_length
-                ),
+                # (
+                #     final_elevation
+                #     + (init_elevation - final_elevation) * j / path_length
+                # ),
+                init_elevation,
                 dem[path_row, path_col],
             )
 
