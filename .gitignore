@@ -85,3 +85,4 @@ target/
 # data folder
 data/
 /*.vscode*/
+benchmarks.txt

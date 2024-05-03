@@ -396,7 +396,12 @@ def create_dataset(
             y_size,
             1,
             data_type,
-            options=["COMPRESS=LZW"],
+            options=[
+                "COMPRESS=LZW",
+                "TILED=YES",
+                "BIGTIFF=YES",
+                "NUM_THREADS=ALL_CPUS",
+            ],
         )
         if geotransform:
             dataset.SetGeoTransform(geotransform)
@@ -406,7 +411,7 @@ def create_dataset(
         band.SetNoDataValue(nodata_value)
         return dataset
     except Exception as e:
-        raise ValueError(f"Error creating dataset '{filepath}'") from e
+        raise ValueError(f"Error creating dataset '{filepath}': {e}") from e
 
 
 def read_tile(filepath: str):
