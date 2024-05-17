@@ -4,7 +4,7 @@ import numpy as np
 DEFAULT_SEARCH_RADIUS = 200
 DEFAULT_MAX_PITS = 24
 UNVISITED_INDEX = -1
-EPSILON_GRADIENT = 1e-5  # small value to apply to gradient of breaching to nodata cells
+EPSILON_GRADIENT = 0  # small value to apply to gradient of breaching to nodata cells
 DEFAULT_CHUNK_SIZE = 2000
 
 #   3  |   2    |  1
@@ -57,3 +57,9 @@ FLOW_DIRECTIONS = np.array(
 FLOW_ACCUMULATION_NODATA = -9999
 FLOW_TERMINATES = (-1, -1)
 FLOW_EXTERNAL = (-2, -2)
+EDGE_LABEL = np.int64(1)  # edge label of fill depressions algorithm
+# Define flags for each side
+TOP = 0b0001  # Binary representation of 1
+RIGHT = 0b0010  # Binary representation of 2
+BOTTOM = 0b0100  # Binary representation of 4
+LEFT = 0b1000  # Binary representation of 8

@@ -3,7 +3,7 @@ from numba import njit, prange
 from osgeo import gdal
 
 from overflow.util.raster import raster_chunker
-from overflow.constants import DEFAULT_CHUNK_SIZE
+from overflow.constants import DEFAULT_CHUNK_SIZE, EPSILON_GRADIENT
 
 
 @njit(parallel=True)
@@ -39,14 +39,31 @@ def breach_single_cell_pits_in_chunk(
         for col in range(2, cols - 2):
             z = chunk[row, col]
             if z != nodata_value:
-                flag = True
+                is_flat = True
+                is_sink = True
                 for k in range(8):
                     zn = chunk[row + dy[k], col + dx[k]]
-                    if zn <= z or zn == nodata_value:
-                        flag = False
+                    # check if the cell is flat
+                    # a cell cannot be flat if one if its neighbors is different
+                    if zn != z:
+                        is_flat = False
+                    # check for sink
+                    # a sink is a cell that has no neighbors strictly
+                    # lower than it.
+                    # nodata is considered the lowest possible value
+                    if zn == nodata_value or zn < z:
+                        is_sink = False
                         break
 
-                if flag:
+                if not is_flat and is_sink:
+                    # Any cell that is a sink and not flat
+                    # is marked as an unsolved pit for processing.
+                    # This includes cells on the edge of a flat with no lower neighbors,
+                    # but with at least one higher neighbor and one equal neighbor
+                    # but does not include cells where all nieghbors are equal to the cell
+                    # or when a cell as at least one lower neighbor.
+                    # By only considering true pits or cells on the edges
+                    # of flats this reduces the amount of processing for large flat areas
                     unsolved_pits_raster[row, col] = 1
 
     pit_indicies = np.argwhere(unsolved_pits_raster == 1)
@@ -58,6 +75,9 @@ def breach_single_cell_pits_in_chunk(
             zn = chunk[row + dy2[k], col + dx2[k]]
             if zn <= z or zn == nodata_value:
                 solved = True
+                if zn == nodata_value:
+                    # we're breaching to a nodata value, so apply a small gradient
+                    zn = z - 2 * EPSILON_GRADIENT
                 chunk[row + dy[breachcell[k]], col + dx[breachcell[k]]] = (z + zn) / 2
         if solved:
             unsolved_pits_raster[row, col] = 0

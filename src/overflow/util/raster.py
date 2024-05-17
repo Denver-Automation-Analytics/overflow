@@ -215,27 +215,54 @@ def raster_chunker(
             progress_bar.update(1)
 
 
-@jitclass(
-    [
-        ("row", int64),
-        ("column", int64),
-        ("cost", float32),
-    ]
-)
-class GridCell:
-    """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
+def create_grid_cell_class(value_type):
+    @jitclass
+    class GridCell:
+        """A class to represent a cell in the grid. Used with heapq to prioritize cells by cost."""
 
-    def __init__(self, row, column, cost):
+        row: int64
+        col: int64
+        value: value_type
+
+        def __init__(self, row, col, value):
+            self.row = row
+            self.col = col
+            self.value = value
+
+        # Define comparison methods based on the cost attribute so this can be used in a heapq
+        def __lt__(self, other):
+            return self.value < other.value
+
+        def __eq__(self, other):
+            return self.value == other.value
+
+        def __le__(self, other):
+            return self.value <= other.value
+
+        def __gt__(self, other):
+            return self.value > other.value
+
+        def __ge__(self, other):
+            return self.value >= other.value
+
+        def __ne__(self, other):
+            return self.value != other.value
+
+    return GridCell
+
+
+GridCellInt64 = create_grid_cell_class(int64)
+GridCellFloat32 = create_grid_cell_class(float32)
+
+
+@jitclass
+class GridCoordinate:
+    row: int64
+    col: int64
+
+    def __init__(self, row, col):
         self.row = row
-        self.column = column
-        self.cost = cost
-
-    # Define comparison methods based on the cost attribute so this can be used in a heapq
-    def __lt__(self, other):
-        return self.cost < other.cost
-
-    def __eq__(self, other):
-        return self.cost == other.cost
+        self.col = col
 
 
 class Side(Enum):
@@ -369,7 +396,12 @@ def create_dataset(
             y_size,
             1,
             data_type,
-            options=["COMPRESS=LZW"],
+            options=[
+                "COMPRESS=LZW",
+                "TILED=YES",
+                "BIGTIFF=YES",
+                "NUM_THREADS=ALL_CPUS",
+            ],
         )
         if geotransform:
             dataset.SetGeoTransform(geotransform)
@@ -379,7 +411,7 @@ def create_dataset(
         band.SetNoDataValue(nodata_value)
         return dataset
     except Exception as e:
-        raise ValueError(f"Error creating dataset '{filepath}'") from e
+        raise ValueError(f"Error creating dataset '{filepath}': {e}") from e
 
 
 def read_tile(filepath: str):

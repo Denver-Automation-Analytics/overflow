@@ -127,7 +127,7 @@ def label_watersheds_tiled(
     global_state = GlobalState(tile_rows, tile_cols, chunk_size)
     tile_index = 0
 
-    max_workers = numba.config.NUMBA_NUM_THREADS
+    max_workers = numba.config.NUMBA_NUM_THREADS  # pylint: disable=no-member
     task_queue = queue.Queue(max_workers)
 
     lock = Lock()

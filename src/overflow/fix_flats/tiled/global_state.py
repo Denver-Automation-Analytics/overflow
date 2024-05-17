@@ -168,7 +168,7 @@ def create_global_state(
     tile_index = 0
     tile_index_map = {}
 
-    max_workers = numba.config.NUMBA_NUM_THREADS
+    max_workers = numba.config.NUMBA_NUM_THREADS  # pylint: disable=no-member
     task_queue = queue.Queue(max_workers)
     lock = Lock()
 

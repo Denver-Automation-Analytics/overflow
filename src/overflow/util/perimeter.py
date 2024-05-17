@@ -6,7 +6,7 @@ import numpy as np
 from overflow.util.raster import Corner, Side
 
 
-@njit(cache=True)
+@njit
 def get_tile_perimeter(array: np.ndarray) -> np.ndarray:
     rows = len(array)
     cols = len(array[0])

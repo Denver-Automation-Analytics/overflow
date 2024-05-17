@@ -9,7 +9,7 @@ import numpy as np
 from osgeo import gdal
 from overflow.util.raster import raster_chunker, RasterChunk
 from overflow.util.perimeter import Int64Perimeter
-from overflow.util.queue import Queue
+from overflow.util.queue import Int64PairQueue as Queue
 from overflow.constants import FLOW_DIRECTION_UNDEFINED
 from overflow.util.raster import neighbor_generator
 from overflow.numba_types import Int64PairList
@@ -21,7 +21,7 @@ from overflow.fix_flats.tiled.global_state import GlobalState
 MAX_FLAT_HEIGHT = (2**31 - 1) // 2
 
 
-@njit(cache=True)
+@njit
 def get_edge_exterior_distances(
     dist_to_edge_perimeter: Int64Perimeter,
 ) -> tuple[list, int, dict]:
@@ -57,7 +57,7 @@ def get_edge_exterior_distances(
     return exterior_edges, max_loop, loop_index_map
 
 
-@njit(cache=True)
+@njit
 def away_from_higher_tile(
     interior_high_edges: Int64PairList,
     dist_to_high_edge_perimeter: Int64Perimeter,
@@ -127,7 +127,7 @@ def away_from_higher_tile(
                 interior_high_edges.push((neighbor_row, neighbor_col))
 
 
-@njit(cache=True)
+@njit
 def towards_lower_tile(
     interior_low_edges: Int64PairList,
     dist_to_low_edge_perimeter: Int64Perimeter,
@@ -285,7 +285,7 @@ def create_flat_mask(
     """
     tile_index = 0
     tile_index_map = {}
-    max_workers = numba.config.NUMBA_NUM_THREADS
+    max_workers = numba.config.NUMBA_NUM_THREADS  # pylint: disable=no-member
     task_queue = queue.Queue(max_workers)
     lock = Lock()
 

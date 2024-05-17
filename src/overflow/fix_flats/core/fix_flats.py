@@ -10,10 +10,10 @@ from overflow.constants import (
     FLOW_DIRECTION_UNDEFINED,
     FLOW_DIRECTIONS,
 )
-from overflow.util.queue import Queue
+from overflow.util.queue import Int64PairQueue as Queue
 
 
-@njit(cache=True)
+@njit
 def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     """Algorithm 3 FlatEdges: This function locates flat cells which border on
     higher and lower terrain and places them into queues for further processing,
@@ -70,7 +70,7 @@ def flat_edges(dem: np.ndarray, fdr: np.ndarray) -> tuple[list, list]:
     return high_edges, low_edges
 
 
-@njit(cache=True)
+@njit
 def label_flats(
     dem: np.ndarray, labels: np.ndarray, new_label: int, flat_row: int, flat_col: int
 ) -> None:
@@ -100,7 +100,7 @@ def label_flats(
     # create FIFO queue for to_be_filled
     to_be_filled = Queue([(flat_row, flat_col)])
     elev = dem[flat_row, flat_col]
-    while to_be_filled:
+    while len(to_be_filled) > 0:
         row, col = to_be_filled.pop()
         not_in_bounds = row < 0 or row >= dem.shape[0] or col < 0 or col >= dem.shape[1]
         if not_in_bounds:
@@ -117,7 +117,7 @@ def label_flats(
             to_be_filled.push((neighbor_row, neighbor_col))
 
 
-@njit(cache=True)
+@njit
 def away_from_higher(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, high_edges: list
 ) -> None:
@@ -167,7 +167,7 @@ def away_from_higher(
                 high_edges.push((neighbor_row, neighbor_col))
 
 
-@njit(cache=True)
+@njit
 def towards_lower(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray, low_edges: list
 ) -> None:
@@ -225,7 +225,7 @@ def towards_lower(
                 low_edges.push((neighbor_row, neighbor_col))
 
 
-@njit(cache=True)
+@njit
 def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
     """Algorithm 1 ResolveFlats: The main body of the algorithm, as described in §2.1.
     Upon entry:
@@ -262,7 +262,7 @@ def resolve_flats(dem: np.ndarray, flow_dirs: np.ndarray) -> tuple[np.ndarray]:
     return flat_mask
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True)
 def d8_masked_flow_dirs(
     dem: np.ndarray, flat_mask: np.ndarray, fdr: np.ndarray
 ) -> None:
@@ -326,7 +326,7 @@ def d8_masked_flow_dirs(
             fdr[row, col] = nmin
 
 
-@njit(cache=True)
+@njit
 def fix_flats(
     dem: np.ndarray, flow_dirs: np.ndarray, inplace: bool = True
 ) -> np.ndarray | None:
