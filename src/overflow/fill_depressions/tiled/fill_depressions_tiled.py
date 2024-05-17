@@ -113,6 +113,7 @@ def raise_tile(
     label_min_elevations: dict[int, float],
     tile_row: int,
     tile_col: int,
+    no_data_value: float,
 ):
     """
     Raise elevation of dem to match global labels.
@@ -123,7 +124,11 @@ def raise_tile(
         for col in range(n_col):
             height = dem[row, col]
             label = labels[row, col]
-            if label != 0:
+            if (
+                label != 0
+                and dem[row, col] != no_data_value
+                and not np.isnan(dem[row, col])
+            ):
                 dem[row, col] = max(label_min_elevations[label], height)
     return dem, tile_row, tile_col
 
@@ -258,6 +263,7 @@ def fill_depressions_tiled(input_path, output_path, chunk_size, working_dir):
                 label_min_elevations,
                 dem_tile.row,
                 dem_tile.col,
+                global_state.no_data,
             )
             future.add_done_callback(handle_raise_tile_result)
 

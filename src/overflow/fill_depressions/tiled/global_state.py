@@ -39,7 +39,7 @@ def handle_edge(
     """
     # Iterate over all indices in the length of DEM_A
     for i, elev_a in enumerate(dem_a):
-        elev_a = elev_a if elev_a != no_data else -np.inf
+        elev_a = elev_a if elev_a != no_data and not np.isnan(elev_a) else -np.inf
         # Iterate over all neighboring indices
         for ni in [i - 1, i, i + 1]:
             elev_b = dem_b[ni] if 0 <= ni < dem_b.shape[0] else -np.inf
@@ -84,8 +84,8 @@ def handle_corner(
         None. The function modifies the graph in place.
     """
     # Handle no_data values
-    elev_a = elev_a if elev_a != no_data else -np.inf
-    elev_b = elev_b if elev_b != no_data else -np.inf
+    elev_a = elev_a if elev_a != no_data and not np.isnan(elev_a) else -np.inf
+    elev_b = elev_b if elev_b != no_data and not np.isnan(elev_b) else -np.inf
 
     # Skip if the labels at the corner of tile A and tile B are the same
     if label_a == label_b:

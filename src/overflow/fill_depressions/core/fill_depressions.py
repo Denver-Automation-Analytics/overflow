@@ -74,13 +74,13 @@ def priority_flood_tile(
     # Nodata cells are treated as -inf
     for i in range(rows):
         for j in (0, cols - 1):
-            if dem[i, j] != no_data:
+            if dem[i, j] != no_data and not np.isnan(dem[i, j]):
                 heappush(open_heap, GridCell(i, j, dem[i, j]))
             else:
                 heappush(open_heap, GridCell(i, j, minus_inf))
     for j in range(1, cols - 1):
         for i in (0, rows - 1):
-            if dem[i, j] != no_data:
+            if dem[i, j] != no_data and not np.isnan(dem[i, j]):
                 heappush(open_heap, GridCell(i, j, dem[i, j]))
             else:
                 heappush(open_heap, GridCell(i, j, minus_inf))
@@ -108,7 +108,7 @@ def priority_flood_tile(
                         labeled_neighbors.append((ni, nj))
 
             for ni, nj in labeled_neighbors:
-                if dem[ni, nj] == no_data or dem[ni, nj] < c:
+                if dem[ni, nj] == no_data or np.isnan(dem[ni, nj]) or dem[ni, nj] < c:
                     labels[i, j] = labels[ni, nj]
                     break
             else:
@@ -119,7 +119,11 @@ def priority_flood_tile(
         for n in NEIGHBOR_OFFSETS:
             ni, nj = i + n[0], j + n[1]
             if 0 <= ni < rows and 0 <= nj < cols:
-                dem_n = dem[ni, nj] if dem[ni, nj] != no_data else minus_inf
+                dem_n = (
+                    dem[ni, nj]
+                    if dem[ni, nj] != no_data and not np.isnan(dem[ni, nj])
+                    else minus_inf
+                )
                 if labels[ni, nj] != 0:
                     if labels[i, j] == labels[ni, nj]:
                         continue
@@ -133,7 +137,9 @@ def priority_flood_tile(
                 else:
                     labels[ni, nj] = labels[i, j]
                     if dem_n <= c:
-                        dem[ni, nj] = c if c != minus_inf else no_data
+                        dem[ni, nj] = (
+                            c if c != minus_inf and not np.isnan(c) else no_data
+                        )
                         pit_queue.push(GridCell(ni, nj, c))
                     else:
                         heappush(open_heap, GridCell(ni, nj, dem_n))
@@ -142,25 +148,41 @@ def priority_flood_tile(
     if sides & TOP:
         for j in range(cols):
             label_pair = tuple((EDGE_LABEL, labels[0, j]))
-            dem_c = dem[0, j] if dem[0, j] != no_data else minus_inf
+            dem_c = (
+                dem[0, j]
+                if dem[0, j] != no_data and not np.isnan(dem[0, j])
+                else minus_inf
+            )
             if label_pair not in graph or dem_c < graph[label_pair]:
                 graph[label_pair] = dem_c
     if sides & RIGHT:
         for i in range(rows):
             label_pair = tuple((EDGE_LABEL, labels[i, cols - 1]))
-            dem_c = dem[i, cols - 1] if dem[i, cols - 1] != no_data else minus_inf
+            dem_c = (
+                dem[i, cols - 1]
+                if dem[i, cols - 1] != no_data and not np.isnan(dem[i, cols - 1])
+                else minus_inf
+            )
             if label_pair not in graph or dem_c < graph[label_pair]:
                 graph[label_pair] = dem_c
     if sides & BOTTOM:
         for j in range(cols):
             label_pair = tuple((EDGE_LABEL, labels[rows - 1, j]))
-            dem_c = dem[rows - 1, j] if dem[rows - 1, j] != no_data else minus_inf
+            dem_c = (
+                dem[rows - 1, j]
+                if dem[rows - 1, j] != no_data and not np.isnan(dem[rows - 1, j])
+                else minus_inf
+            )
             if label_pair not in graph or dem_c < graph[label_pair]:
                 graph[label_pair] = dem_c
     if sides & LEFT:
         for i in range(rows):
             label_pair = tuple((EDGE_LABEL, labels[i, 0]))
-            dem_c = dem[i, 0] if dem[i, 0] != no_data else minus_inf
+            dem_c = (
+                dem[i, 0]
+                if dem[i, 0] != no_data and not np.isnan(dem[i, 0])
+                else minus_inf
+            )
             if label_pair not in graph or dem_c < graph[label_pair]:
                 graph[label_pair] = dem_c
 
